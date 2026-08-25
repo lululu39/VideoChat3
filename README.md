@@ -37,6 +37,7 @@
 It combines **I3D-ViT** for 16× spatiotemporal compression with **Adaptive Frame Resolution** for evidence-aware streaming, trained on **Academic2M**, **LV116K**, and **OL617K**.
 
 ## :fire: Updates
+- [x] **2026/08/25**: 🔥🔥🔥Update the arXiv paper and evaluation code.
 - [x] **2026/07/27**: 🔥🔥🔥Release the full-stage training data and training checkpoints for each stage of VideoChat3.
 - [x] **2026/07/27**: 🔥🔥🔥Release the training code for VideoChat3.
 - [x] **2026/07/24**: 🔥🔥🔥Release the evaluation code for VideoChat3.
