@@ -24,7 +24,6 @@ from queue import Queue
 from threading import Thread
 from typing import List, Optional, TextIO
 
-import cv2
 from PIL import Image
 
 
@@ -60,46 +59,80 @@ _TAG_RE = re.compile(r"^\s*(</Silence>|</Standby>|</Response>)")
 # Video frame extractor
 # ---------------------------------------------------------------------------
 class VideoFrameExtractor:
-    """Extract video frames at target fps in decode order."""
+    """Extract video frames at target fps via decord (index-based)."""
 
     def __init__(self, video_path: str, target_fps: float = 1.0, prefetch: bool = True):
-        self.video_path = video_path
-        self.target_fps = target_fps
-        self.cap = cv2.VideoCapture(video_path)
-        if not self.cap.isOpened():
-            raise ValueError(f"Cannot open video: {video_path}")
+        from decord import VideoReader, cpu
 
-        self.original_fps = self.cap.get(cv2.CAP_PROP_FPS)
-        self.total_frames = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        self.duration = self.total_frames / self.original_fps if self.original_fps > 0 else 0
-        self.frame_interval = max(int(round(self.original_fps / target_fps)), 1)
-        self.num_extracted_frames = int(self.duration * target_fps)
+        if target_fps <= 0:
+            raise ValueError(f"target_fps must be positive, got {target_fps}")
+
+        self.video_path = video_path
+        self.target_fps = float(target_fps)
+        self._closed = False
+        self._vr = None
+
+        try:
+            self._vr = VideoReader(video_path, ctx=cpu(0), num_threads=1)
+        except Exception as exc:
+            raise ValueError(f"Cannot open video: {video_path}") from exc
+
+        self.original_fps = float(self._vr.get_avg_fps())
+        self.total_frames = len(self._vr)
+        if self.original_fps <= 0 or self.total_frames <= 0:
+            raise ValueError(
+                f"Invalid video metadata for {video_path}: "
+                f"fps={self.original_fps}, frames={self.total_frames}"
+            )
+
+        self.duration = self.total_frames / self.original_fps
+        n = int(self.duration * self.target_fps)
+        self._frame_indices = [
+            min(int(round(i * self.original_fps / self.target_fps)), self.total_frames - 1)
+            for i in range(n)
+        ]
+        self.num_extracted_frames = len(self._frame_indices)
+        self.frame_interval = max(int(round(self.original_fps / self.target_fps)), 1)
 
         self._prefetch = prefetch
+        self._cursor = 0
+        self._thread: Optional[Thread] = None
         if prefetch:
             self._queue: "Queue[Optional[Image.Image]]" = Queue(maxsize=4)
-            Thread(target=self._producer, daemon=True).start()
-        else:
-            self._iter = self._sequential_iter()
+            self._thread = Thread(target=self._producer, daemon=True)
+            self._thread.start()
 
-    def _sequential_iter(self):
-        idx, extracted = 0, 0
-        while extracted < self.num_extracted_frames:
-            ret, frame = self.cap.read()
-            if not ret:
-                break
-            if idx % self.frame_interval == 0:
-                yield Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-                extracted += 1
-            idx += 1
+    def _load_frame(self, frame_idx: int) -> Image.Image:
+        return Image.fromarray(self._vr[frame_idx].asnumpy())
 
     def _producer(self):
-        for img in self._sequential_iter():
-            self._queue.put(img)
-        self._queue.put(None)
+        try:
+            for fi in self._frame_indices:
+                if self._closed:
+                    break
+                self._queue.put(self._load_frame(fi))
+        except Exception:
+            # Ensure the consumer never blocks forever if decode fails.
+            pass
+        finally:
+            try:
+                self._queue.put(None)
+            except Exception:
+                pass
 
     def get_frame_at_round(self, round_num: int) -> Image.Image:
-        img = self._queue.get() if self._prefetch else next(self._iter, None)
+        if self._closed:
+            raise StopIteration(f"Extractor closed at round {round_num}")
+
+        if self._prefetch:
+            img = self._queue.get()
+        else:
+            if self._cursor >= self.num_extracted_frames:
+                img = None
+            else:
+                img = self._load_frame(self._frame_indices[self._cursor])
+                self._cursor += 1
+
         if img is None:
             raise StopIteration(f"No more frames at round {round_num}")
         return img
@@ -108,12 +141,27 @@ class VideoFrameExtractor:
         return self.num_extracted_frames
 
     def close(self):
-        if self.cap is not None:
-            self.cap.release()
-            self.cap = None
+        if self._closed:
+            return
+        self._closed = True
+
+        if self._prefetch:
+            # Unblock a producer waiting on a full queue, then wait briefly.
+            try:
+                while True:
+                    self._queue.get_nowait()
+            except Exception:
+                pass
+            if self._thread is not None and self._thread.is_alive():
+                self._thread.join(timeout=1.0)
+
+        self._vr = None
 
     def __del__(self):
-        self.close()
+        try:
+            self.close()
+        except Exception:
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +184,7 @@ class VideoChat3StreamEngine:
         debug_max_text_chars: int = 4000,
     ):
         import torch
-        from transformers import AutoModelForCausalLM, AutoProcessor
+        from transformers import AutoModelForCausalLM, AutoProcessor, AutoModelForImageTextToText
 
         # VideoChat3 uses Qwen2VLImageProcessorFast which supports min/max_pixels.
         # Without max_pixels the processor has no upper bound (longest_edge=16M),
@@ -146,16 +194,23 @@ class VideoChat3StreamEngine:
         self.processor = AutoProcessor.from_pretrained(
             model_path,
             trust_remote_code=True,
-            min_pixels=min_pixels,
-            max_pixels=max_pixels,
         )
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_path,
-            dtype=torch.bfloat16,
-            device_map=device,
-            trust_remote_code=True,
-            attn_implementation=attn_implementation,
-        )
+        if 'Qwen3-VL' in model_path:
+            self.model = AutoModelForImageTextToText.from_pretrained(
+                model_path,
+                dtype=torch.bfloat16,
+                device_map=device,
+                trust_remote_code=True,
+                attn_implementation=attn_implementation,
+            )
+        else:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_path,
+                dtype=torch.bfloat16,
+                device_map=device,
+                trust_remote_code=True,
+                attn_implementation=attn_implementation,
+            )
         self.model.eval()
         self.device = next(self.model.parameters()).device
         self.torch = torch
@@ -223,6 +278,7 @@ class VideoChat3StreamEngine:
             add_generation_prompt=True,
             return_dict=True,
             return_tensors="pt",
+            images_kwargs={"do_resize": False},
         ).to(self.model.device)
 
         if self.debug:
@@ -305,26 +361,43 @@ class StreamingSession:
         # Tracks the round_idx of the first user message currently in the window.
         self._window_start_round: int = 0
 
+    @staticmethod
+    def _as_frames(frames) -> List[Image.Image]:
+        if isinstance(frames, (list, tuple)):
+            out = list(frames)
+        else:
+            out = [frames]
+        if not out:
+            raise ValueError("StreamingSession.step requires at least one frame")
+        return out
+
     def _user_content(
         self,
-        frame: Image.Image,
+        frames,
         round_idx: int,
         include_question: bool,
         frame_max_pixels: Optional[int] = None,
     ) -> List[dict]:
-        """Build user message content for a single frame."""
-        time_tag = f"<{round_idx}s-{round_idx + 1}s>"
-        text = time_tag
-        if include_question and self.question:
-            text = f"{self.question}\n{text}"
-        image_item: dict = {"type": "image", "image": frame}
-        if frame_max_pixels is not None:
-            image_item["min_pixels"] = 28 * 28
-            image_item["max_pixels"] = frame_max_pixels
-        return [
-            image_item,
-            {"type": "text", "text": text},
-        ]
+        """Build user message content for one inference turn (1+ frames).
+
+        Interleave per-frame time tags with images, e.g. 2fps / infer_fps=1:
+            <0s-0.5s>, img0, <0.5s-1s>, img1
+        """
+        from .streaming_video_base import _format_frame_time_tag
+
+        frames = self._as_frames(frames)
+        n_frames = len(frames)
+        infer_fps = float(getattr(self, "_infer_fps", getattr(self, "infer_fps", 1.0)))
+        content: List[dict] = []
+        for frame_idx, frame in enumerate(frames):
+            tag = _format_frame_time_tag(
+                round_idx, frame_idx, n_frames, infer_fps
+            )
+            if frame_idx == 0 and include_question and self.question:
+                tag = f"{self.question}\n{tag}"
+            content.append({"type": "image", "image": frame})
+            content.append({"type": "text", "text": tag})
+        return content
 
     def _inject_question(self, msg: dict) -> None:
         """Prepend the question into the text part of a user message (in-place)."""
@@ -347,12 +420,13 @@ class StreamingSession:
 
     def _append_turn(
         self,
-        frame: Image.Image,
+        frames,
         round_idx: int,
         frame_max_pixels: Optional[int] = None,
     ) -> None:
+        frames = self._as_frames(frames)
         if not self._messages:
-            # First frame: include question if global_question or round matches question_time.
+            # First turn: include question if global_question or round matches question_time.
             # VideoChat3's processor requires content to always be List[dict], never bare str.
             if self.system:
                 self._messages.append(
@@ -363,14 +437,14 @@ class StreamingSession:
                 {
                     "role": "user",
                     "content": self._user_content(
-                        frame, round_idx, include_q, frame_max_pixels
+                        frames, round_idx, include_q, frame_max_pixels
                     ),
                 }
             )
             self._window_start_round = round_idx
             return
 
-        # Subsequent frames: append last assistant answer then new user turn.
+        # Subsequent turns: append last assistant answer then new user turn.
         if self._last_answer is not None:
             self._messages.append(
                 {"role": "assistant", "content": self._text_only(self._last_answer)}
@@ -384,12 +458,12 @@ class StreamingSession:
             {
                 "role": "user",
                 "content": self._user_content(
-                    frame, round_idx, include_q, frame_max_pixels
+                    frames, round_idx, include_q, frame_max_pixels
                 ),
             }
         )
 
-        # Sliding window: keep at most max_rounds user turns.
+        # Sliding window: keep at most max_rounds user turns (inference rounds).
         user_count = sum(1 for m in self._messages if m.get("role") == "user")
         if user_count > self.max_rounds:
             rounds_to_remove = user_count - self.max_rounds
@@ -427,18 +501,20 @@ class StreamingSession:
 
     def step(
         self,
-        frame: Image.Image,
+        frames,
         round_idx: int,
         frame_max_pixels: Optional[int] = None,
     ) -> str:
-        """Feed one frame and return the model answer for this round."""
-        self._append_turn(frame, round_idx, frame_max_pixels=frame_max_pixels)
+        """Feed one inference turn (1+ frames) and return the model answer."""
+        frames = self._as_frames(frames)
+        self._append_turn(frames, round_idx, frame_max_pixels=frame_max_pixels)
 
         if self.debug:
             msgs = self._messages
             user_turns = sum(1 for m in msgs if m.get("role") == "user")
             self.engine._dbg(
                 f"\n###### StreamingSession.step round_idx={round_idx} "
+                f"n_frames={len(frames)} "
                 f"question_time={self.question_time} global_question={self.global_question} "
                 f"| turns={len(msgs)} user_turns={user_turns} "
                 f"window_start={self._window_start_round} ######"
@@ -477,6 +553,7 @@ def run_video(
     video_path: str,
     question: str,
     target_fps: float = 1.0,
+    infer_fps: float = 1.0,
     system: str = SYSTEM,
     question_time: int = 0,
     max_rounds: int = 32,
@@ -485,6 +562,16 @@ def run_video(
     temperature: float = 0.0,
     verbose: bool = True,
 ) -> dict:
+    if target_fps < infer_fps - 1e-9:
+        raise ValueError(f"target_fps ({target_fps}) must be >= infer_fps ({infer_fps})")
+    ratio = target_fps / infer_fps
+    frames_per_step = int(round(ratio))
+    if frames_per_step < 1 or abs(ratio - frames_per_step) > 1e-6:
+        raise ValueError(
+            f"target_fps / infer_fps must be a positive integer, "
+            f"got {target_fps} / {infer_fps} = {ratio}"
+        )
+
     extractor = VideoFrameExtractor(video_path, target_fps=target_fps)
     session = StreamingSession(
         engine=engine,
@@ -499,13 +586,20 @@ def run_video(
     )
 
     outputs = {}
+    total_sample = extractor.get_total_rounds()
+    infer_rounds = total_sample // frames_per_step
     try:
-        for i in range(extractor.get_total_rounds()):
-            frame = extractor.get_frame_at_round(i)
-            answer = session.step(frame, round_idx=i)
+        for i in range(infer_rounds):
+            frames = [
+                extractor.get_frame_at_round(i * frames_per_step + j)
+                for j in range(frames_per_step)
+            ]
+            answer = session.step(frames, round_idx=i)
             outputs[f"Round {i}"] = answer
             if verbose:
-                print(f"[{i}s-{i + 1}s] {answer}")
+                start = i / infer_fps
+                end = (i + 1) / infer_fps
+                print(f"[{start}s-{end}s] {answer}")
     finally:
         extractor.close()
 

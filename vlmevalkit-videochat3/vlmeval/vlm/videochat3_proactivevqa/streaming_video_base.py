@@ -7,6 +7,13 @@ unchanged.
 
 Dataset (ProactiveVideoQA) puts all streaming metadata into the message as a
 text item with a special prefix; this module extracts it.
+
+Sampling vs inference
+---------------------
+``target_fps`` controls frame sampling density.  ``infer_fps`` (default 1.0)
+controls how often the model is invoked.  When ``target_fps > infer_fps``,
+each inference step packs ``target_fps / infer_fps`` frames into one turn,
+while records / time tags remain on the ``infer_fps`` grid (typically 1s).
 """
 from __future__ import annotations
 
@@ -50,6 +57,30 @@ def _format_time_tag(round_idx: int, fps: float) -> str:
     return f'<{_format_time(start)}s-{_format_time(end)}s>'
 
 
+def _frame_span(round_idx: int, frame_idx: int, n_frames: int, infer_fps: float):
+    """Wall-clock span of one packed frame inside an inference round.
+
+    Example (infer_fps=1, n_frames=2, round_idx=0):
+        frame 0 -> [0, 0.5), frame 1 -> [0.5, 1).
+    """
+    if n_frames < 1:
+        raise ValueError(f'n_frames must be >= 1, got {n_frames}')
+    if frame_idx < 0 or frame_idx >= n_frames:
+        raise ValueError(f'frame_idx out of range: {frame_idx} for n_frames={n_frames}')
+    round_start = round_idx / infer_fps
+    frame_dur = (1.0 / infer_fps) / n_frames
+    start = round_start + frame_idx * frame_dur
+    end = start + frame_dur
+    return _normalise_time(start), _normalise_time(end)
+
+
+def _format_frame_time_tag(
+    round_idx: int, frame_idx: int, n_frames: int, infer_fps: float
+) -> str:
+    start, end = _frame_span(round_idx, frame_idx, n_frames, infer_fps)
+    return f'<{_format_time(start)}s-{_format_time(end)}s>'
+
+
 def _parse_raw_answer(raw: str):
     """Map a raw tagged answer to (answerable, model_response).
 
@@ -74,6 +105,7 @@ def _extract_stream_meta(message: list) -> dict:
 
 
 def _effective_fps(model, meta: dict) -> float:
+    """Sampling fps (frame extraction density)."""
     fps = getattr(model, 'target_fps', None)
     if fps is None:
         fps = meta.get('target_fps', 1.0)
@@ -83,8 +115,35 @@ def _effective_fps(model, meta: dict) -> float:
     return fps
 
 
+def _effective_infer_fps(model) -> float:
+    """Inference fps (how often the model is called). Defaults to 1.0."""
+    fps = getattr(model, 'infer_fps', None)
+    if fps is None:
+        fps = 1.0
+    fps = float(fps)
+    if fps <= 0:
+        raise ValueError(f'infer_fps must be positive, got {fps}')
+    return fps
+
+
+def _frames_per_step(sample_fps: float, infer_fps: float) -> int:
+    """How many sampled frames are packed into one inference turn."""
+    if sample_fps < infer_fps - 1e-9:
+        raise ValueError(
+            f'target_fps ({sample_fps}) must be >= infer_fps ({infer_fps})'
+        )
+    ratio = sample_fps / infer_fps
+    n = int(round(ratio))
+    if n < 1 or abs(ratio - n) > 1e-6:
+        raise ValueError(
+            f'target_fps / infer_fps must be a positive integer, '
+            f'got {sample_fps} / {infer_fps} = {ratio}'
+        )
+    return n
+
+
 def _compute_stream_rounds(meta: dict, fps: float) -> int:
-    """Compute how many streaming steps to run at the requested fps."""
+    """Compute how many inference steps to run at the given fps grid."""
     answer = meta.get('answer') or []
     duration = meta.get('duration')
     if duration is None or not answer:
@@ -97,6 +156,12 @@ def _compute_stream_rounds(meta: dict, fps: float) -> int:
     return max(1, min(by_frames, by_reply))
 
 
+def _as_frame_list(frames):
+    if isinstance(frames, (list, tuple)):
+        return list(frames)
+    return [frames]
+
+
 # ---------------------------------------------------------------------------
 # Abstract base class
 # ---------------------------------------------------------------------------
@@ -106,7 +171,7 @@ class StreamingVideoModel(BaseModel):
 
     Sub-classes must implement:
         reset_session(question, extra_turns)  — initialise a fresh session
-        step(frame, round_idx) -> str         — process one frame, return raw tag
+        step(frames, round_idx) -> str        — process one infer turn (1+ frames)
         _open_extractor(video_path)           — return VideoFrameExtractor-compatible obj
 
     The full streaming loop runs inside generate_inner; VLMEvalKit's scheduling,
@@ -148,8 +213,10 @@ class StreamingVideoModel(BaseModel):
     def generate_inner(self, message: list, dataset=None) -> str:
         """Run the streaming loop; return JSON string of per-step records."""
         meta = _extract_stream_meta(message)
-        fps = _effective_fps(self, meta)
-        target_rounds = _compute_stream_rounds(meta, fps)
+        sample_fps = _effective_fps(self, meta)
+        infer_fps = _effective_infer_fps(self)
+        frames_per_step = _frames_per_step(sample_fps, infer_fps)
+        target_rounds = _compute_stream_rounds(meta, infer_fps)
 
         self.reset_session(
             question=meta['question'],
@@ -160,14 +227,17 @@ class StreamingVideoModel(BaseModel):
         extractor = self._open_extractor(meta['video_path'])
         try:
             for r in range(target_rounds):
+                frames = []
                 try:
-                    frame = extractor.get_frame_at_round(r)
+                    for _ in range(frames_per_step):
+                        frames.append(extractor.get_frame_at_round(r))
                 except StopIteration:
-                    break
-                raw = self.step(frame, round_idx=r)
+                    if not frames:
+                        break
+                raw = self.step(frames, round_idx=r)
                 answerable, content = _parse_raw_answer(raw)
                 records.append({
-                    'video_span': list(_round_span(r, fps)),
+                    'video_span': list(_round_span(r, infer_fps)),
                     'answerable': answerable,
                     'model_response': content,
                     'raw_answer': raw,
@@ -197,8 +267,11 @@ class StreamingVideoModel(BaseModel):
         raise NotImplementedError
 
     @abstractmethod
-    def step(self, frame, round_idx: int) -> str:
-        """Process one frame and return a raw tagged answer string.
+    def step(self, frames, round_idx: int) -> str:
+        """Process one inference turn (one or more frames) and return raw tag.
+
+        ``frames`` may be a single PIL Image or a list of Images packed into
+        the same user turn (when target_fps > infer_fps).
 
         Returns one of:
             '</Silence>'
