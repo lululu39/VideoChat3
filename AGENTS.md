@@ -5,7 +5,7 @@
 - Keep this memo concise: retain only stable, code-backed conclusions; merge or delete stale detail instead of appending a diary.
 - Treat executable model/data paths as authoritative over README wording and experiment names.
 - When comparing with `/data/yibo/VideoMamba`, inspect only VideoViT and VideoLACT; do not use Mamba or VideoMARS as references.
-- Store downloaded checkpoints and datasets outside Git under `/mnt/localssd/VideoChat3`; create this project-named directory when absent.
+- Store checkpoints under `/mnt/localssd/VideoChat3` and datasets under `/mnt/localssd/dataset/VideoChat3`; create these project-named directories when absent and never place downloaded artifacts in Git.
 
 ## Environment
 
@@ -20,6 +20,12 @@
 - The final Stage 3 checkpoint is `MCG-NJU/VideoChat3-4B`, pinned at revision `37fa901ec5913f84bc31108ebc1e60ad1903634c`, and lives at `/mnt/localssd/VideoChat3/VideoChat3-4B`.
 - Reproduce it with `install -d /mnt/localssd/VideoChat3/VideoChat3-4B`, then run `uv run --frozen python -c 'from huggingface_hub import snapshot_download; snapshot_download(repo_id="MCG-NJU/VideoChat3-4B", revision="37fa901ec5913f84bc31108ebc1e60ad1903634c", local_dir="/mnt/localssd/VideoChat3/VideoChat3-4B")'`.
 - Verify the 28 official file names/sizes, the three safetensors shards against `model.safetensors.index.json`, and local `AutoConfig`/`AutoProcessor` loading; SHA rechecking is unnecessary.
+
+## Stage 3 Data
+
+- The filtered lightweight snapshot is `lmwang/VideoChat3-Stage3-Training-Data` revision `a7def4abd394697856be9cd6276efa98a27f23df` at `/mnt/localssd/dataset/VideoChat3/VideoChat3-Stage3-Training-Data`.
+- Download with `snapshot_download` while ignoring `data/image/**`, `videochat3_data_annotations/image/**`, and `videochat3_data_annotations/text/**`. Molmo2 is only an external top-level reference and has no files to exclude in this repo.
+- The verified retained snapshot is 57 files / 535.123 GiB: 28 Video tar shards, 4 Motion-Video tar shards, their annotations/manifests, and top metadata. Keep it packed until an extract-and-delete plan is selected because localssd has limited remaining capacity.
 
 ## VideoChat3 Model
 
