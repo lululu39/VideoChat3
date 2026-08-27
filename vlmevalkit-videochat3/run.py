@@ -48,7 +48,6 @@ from vlmeval.inference import infer_data_job
 from vlmeval.inference_video import infer_data_job_video
 from vlmeval.inference_mt import infer_data_job_mt
 from vlmeval.smp import *
-from vlmeval.utils.result_transfer import MMMU_result_transfer, MMTBench_result_transfer
 
 
 # Make WORLD_SIZE invisible when build models
@@ -405,11 +404,15 @@ def main():
                 if RANK == 0:
                     # Prepare Submission Files for MMMU_TEST AND MMT-Bench_ALL
                     if dataset_name in ['MMMU_TEST']:
+                        from vlmeval.utils.result_transfer import MMMU_result_transfer
+
                         result_json = MMMU_result_transfer(result_file)
                         logger.info(f'Transfer MMMU_TEST result to json for official evaluation, '
                                     f'json file saved in {result_json}')
                         continue
                     elif 'MMT-Bench_ALL' in dataset_name:
+                        from vlmeval.utils.result_transfer import MMTBench_result_transfer
+
                         submission_file = MMTBench_result_transfer(result_file, **judge_kwargs)
                         logger.info(f'Extract options from prediction of MMT-Bench FULL split for official evaluation '
                                     f'(https://eval.ai/web/challenges/challenge-page/2328/overview), '

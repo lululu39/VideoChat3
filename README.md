@@ -58,11 +58,13 @@ The training implementation is available in
 the VideoChat3 model and data pipeline, staged training configurations, initial
 checkpoint construction, and Slurm/non-Slurm distributed launchers.
 
-Install the training project:
+Create the locked Python 3.12 training and evaluation environment from the
+repository root, then enter the training project:
 
 ```bash
+uv sync --frozen
+source .venv/bin/activate
 cd xtuner-videochat3
-pip install -e ".[video]"
 ```
 
 After preparing the model and dataset paths in the selected configuration, start

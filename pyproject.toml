@@ -1,0 +1,37 @@
+[project]
+name = "videochat3-repro-env"
+version = "0.1.0"
+description = "Reproducible training and evaluation environment for VideoChat3"
+requires-python = "==3.12.13"
+dependencies = [
+    "av",
+    "decord2==3.4.0",
+    "flash-attn>=2.7,<3",
+    "setuptools==80.9.0",
+    "torch==2.8.0",
+    "torchvision==0.23.0",
+    "vlmeval",
+    "xtuner",
+]
+
+[tool.uv]
+package = false
+required-version = "==0.12.1"
+link-mode = "copy"
+
+[tool.uv.sources]
+flash-attn = { index = "astral-cu128" }
+torch = { index = "pytorch-cu128" }
+torchvision = { index = "pytorch-cu128" }
+vlmeval = { path = "vlmevalkit-videochat3", editable = true }
+xtuner = { path = "xtuner-videochat3", editable = true }
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+[[tool.uv.index]]
+name = "astral-cu128"
+url = "https://wheels.astral.sh/simple/cu128/"
+explicit = true

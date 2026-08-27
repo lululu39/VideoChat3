@@ -45,24 +45,21 @@ The checkpoint is downloaded from Hugging Face on first use and cached by
 Recommended environment:
 
 - Linux
-- Python 3.10+
-- A CUDA-capable GPU with a compatible PyTorch installation
+- uv 0.12.1
+- A CUDA-capable GPU with a driver compatible with CUDA 12.8
 - FFmpeg/`ffprobe` for video metadata and decoding
 
 ```bash
 git clone https://github.com/MCG-NJU/VideoChat3.git
 cd VideoChat3
-cd vlmevalkit-videochat3
-
-python -m venv .venv
+uv sync --frozen
 source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e .
-python -m pip install flash-attn --no-build-isolation
+cd vlmevalkit-videochat3
 ```
 
-VideoChat3 uses FlashAttention 2. Match the PyTorch, FlashAttention, CUDA, and
-GPU-driver versions in your environment.
+The committed lock installs the local evaluation and training packages in
+editable mode and fixes Python, PyTorch, FlashAttention, CUDA-wheel, and video
+decoding dependencies together.
 
 ### 2. Configure Data
 

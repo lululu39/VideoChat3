@@ -186,7 +186,9 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
         tokenizer_hash: str | None = None,
         hash: str | None = None,
     ):
-        self.ceph_client = Client(conf_path='~/petreloss.conf')       
+        self.ceph_client = (
+            Client(conf_path="~/petreloss.conf") if Client is not None else None
+        )
         self.media_processor = AutoProcessor.from_pretrained(processor_path, trust_remote_code=True)
         self.image_processor = self.media_processor.image_processor
         self.video_processor = self.media_processor.video_processor

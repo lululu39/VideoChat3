@@ -14,24 +14,23 @@ training recipes.
 ### Requirements
 
 - Linux
-- Python 3.10 or later
-- NVIDIA GPUs with a working CUDA environment
-- PyTorch 2.6 or later
+- uv 0.12.1
+- NVIDIA GPUs with a driver compatible with CUDA 12.8
+- FFmpeg/`ffprobe`
 
-Create and activate an isolated Python environment, then install the training
-project from this directory:
+From the VideoChat3 repository root, reproduce the locked Python 3.12.13
+training and evaluation environment, then enter this directory:
 
 ```bash
+uv sync --frozen
+source .venv/bin/activate
 cd xtuner-videochat3
-python -m pip install --upgrade pip
-pip install -e ".[video]"
 ```
 
-XTuner recommends installing
-[FlashAttention](https://github.com/Dao-AILab/flash-attention) for faster training.
-Install a version compatible with the PyTorch, CUDA, and GPU architecture in the
-training environment. The supplied launch scripts use `XTUNER_USE_FA3=0` by
-default; Hopper users with FlashAttention-3 installed may override it:
+The committed `uv.lock` includes XTuner and VLMEvalKit as editable packages,
+plus matching CUDA 12.8 builds of PyTorch, torchvision, and FlashAttention 2.
+The supplied launch scripts use `XTUNER_USE_FA3=0` by default; Hopper users with
+a separately validated FlashAttention-3 installation may override it:
 
 ```bash
 export XTUNER_USE_FA3=1

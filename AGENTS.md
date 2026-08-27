@@ -6,6 +6,14 @@
 - Treat executable model/data paths as authoritative over README wording and experiment names.
 - When comparing with `/data/yibo/VideoMamba`, inspect only VideoViT and VideoLACT; do not use Mamba or VideoMARS as references.
 
+## Environment
+
+- The canonical environment is the root uv project: uv 0.12.1, CPython 3.12.13, `.venv`, and committed `uv.lock`. Reproduce it only with `uv sync --frozen`; do not substitute ad-hoc pip or Conda installs.
+- Root `pyproject.toml` installs local XTuner and VLMEvalKit editable sources. The locked GPU ABI is torch 2.8.0 + torchvision 0.23.0 + FlashAttention 2.8.3 on CUDA 12.8; system prerequisites are a compatible NVIDIA driver and FFmpeg/`ffprobe`.
+- Python 3.12 compatibility uses `decord2==3.4.0` under the normal `import decord` API, headless OpenCV, and setuptools 80.9.0 for mmengine's legacy `pkg_resources` import.
+- Petrel/Ceph is optional external infrastructure and is not in the public lock; local or mounted media works without it, while `s3://` data still requires the private client and credentials.
+- Run commands after `source .venv/bin/activate` or through `uv run --frozen`. When dependencies change, update package metadata, regenerate `uv.lock`, and verify a clean `uv sync --frozen`; never edit the lock manually.
+
 ## VideoChat3 Model
 
 - `VideoChat3ForConditionalGeneration` is `I3D-ViT -> patch merger -> multimodal projector -> Qwen3 LM`. Projected visual features replace image/video placeholder embeddings before the LM forward.
