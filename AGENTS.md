@@ -15,6 +15,12 @@
 - All clips from the batch are concatenated into one packed vision forward. FlashAttention uses `cu_seqlens` to evaluate them as independent sequences in one batched call; there is no cross-clip vision attention, KV cache, or recurrent state. Thus this is batched clip processing, not stateful 4-frame streaming.
 - After every clip, `patch_merger` averages the temporal axis and groups each 2x2 spatial neighborhood. A full 4-frame clip therefore gets 4x temporal and 4x spatial compression (16x total) before projection. Cross-clip reasoning happens only later in the LM, aided by per-clip timestamp tokens.
 
+## Planned LACT Integration
+
+- Start from a pretrained VideoChat3 VLM and preserve its existing 4-frame joint spatial-temporal attention windows. Add a LACT-style fast-weight memory residual after each vision attention block so consecutive 4-frame clips communicate through recurrent fast state.
+- Use one apply-then-update step per 4-frame clip and a zero-initialized memory gate. At initialization the memory residual is exactly zero, preserving the pretrained VideoChat3 function.
+- Train on Stage 3 LV and OL data, potentially mixed with a small, still-undecided amount of Academic2M. Freeze the LM, multimodal projector, and every non-vision module; train the vision encoder, including the new fast-weight parameters.
+
 ## VideoMamba ViT/LACT Comparison
 
 - Image and video VideoViT share the same pre-norm attention and slow SwiGLU MLP parameter layout. VideoViT adds Conv3d tubelet embedding and temporal position; it uses one global CLS plus all tubelet patch tokens in full-sequence spatial-temporal attention, so it is not streaming.
