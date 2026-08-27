@@ -5,6 +5,7 @@
 - Keep this memo concise: retain only stable, code-backed conclusions; merge or delete stale detail instead of appending a diary.
 - Treat executable model/data paths as authoritative over README wording and experiment names.
 - When comparing with `/data/yibo/VideoMamba`, inspect only VideoViT and VideoLACT; do not use Mamba or VideoMARS as references.
+- Store downloaded checkpoints and datasets outside Git under `/mnt/localssd/VideoChat3`; create this project-named directory when absent.
 
 ## Environment
 
@@ -13,6 +14,12 @@
 - Python 3.12 compatibility uses `decord2==3.4.0` under the normal `import decord` API, headless OpenCV, and setuptools 80.9.0 for mmengine's legacy `pkg_resources` import.
 - Petrel/Ceph is optional external infrastructure and is not in the public lock; local or mounted media works without it, while `s3://` data still requires the private client and credentials.
 - Run commands after `source .venv/bin/activate` or through `uv run --frozen`. When dependencies change, update package metadata, regenerate `uv.lock`, and verify a clean `uv sync --frozen`; never edit the lock manually.
+
+## Final Checkpoint
+
+- The final Stage 3 checkpoint is `MCG-NJU/VideoChat3-4B`, pinned at revision `37fa901ec5913f84bc31108ebc1e60ad1903634c`, and lives at `/mnt/localssd/VideoChat3/VideoChat3-4B`.
+- Reproduce it with `install -d /mnt/localssd/VideoChat3/VideoChat3-4B`, then run `uv run --frozen python -c 'from huggingface_hub import snapshot_download; snapshot_download(repo_id="MCG-NJU/VideoChat3-4B", revision="37fa901ec5913f84bc31108ebc1e60ad1903634c", local_dir="/mnt/localssd/VideoChat3/VideoChat3-4B")'`.
+- Verify the 28 official file names/sizes, the three safetensors shards against `model.safetensors.index.json`, and local `AutoConfig`/`AutoProcessor` loading; SHA rechecking is unnecessary.
 
 ## VideoChat3 Model
 
