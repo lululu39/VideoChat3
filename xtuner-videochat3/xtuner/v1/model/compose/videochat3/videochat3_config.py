@@ -59,6 +59,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
     fw_share_init: bool = True
     fw_norm_epsilon: float = 1e-5
     clip_ns_grad_ratio: bool = True
+    clip_state_grad_ratio: bool = True
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(__context)

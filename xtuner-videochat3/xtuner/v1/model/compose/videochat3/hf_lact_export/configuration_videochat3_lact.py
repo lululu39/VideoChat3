@@ -18,6 +18,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         fw_share_init: bool = True,
         fw_norm_epsilon: float = 1e-5,
         clip_ns_grad_ratio: bool = True,
+        clip_state_grad_ratio: bool = True,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
@@ -47,6 +48,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         self.fw_share_init = fw_share_init
         self.fw_norm_epsilon = fw_norm_epsilon
         self.clip_ns_grad_ratio = clip_ns_grad_ratio
+        self.clip_state_grad_ratio = clip_state_grad_ratio
 
 
 class VideoChat3LACTConfig(VideoChat3Config):

@@ -20,6 +20,8 @@ from .videochat3_config import VideoChat3LACTVisionConfig
 
 _NS_GRAD_RATIO_RHO = 1.0
 _NS_GRAD_RATIO_EPS = 1e-12
+_STATE_GRAD_RATIO_RHO = 1.0
+_STATE_GRAD_RATIO_EPS = 1e-12
 
 
 def inverse_softplus(value: float) -> float:
@@ -81,6 +83,103 @@ class _NS5WithBoundedBackward(torch.autograd.Function):
             torch.ones_like(exact_norm),
         )
         return exact_grad * scale.to(exact_grad.dtype), None
+
+
+class _StateGradRatioContext:
+    def __init__(self):
+        self.next_state_grad_norm = None
+
+
+def _joint_state_grad_norm(
+    gradients: tuple[torch.Tensor | None, ...],
+    *,
+    norm_shape: torch.Size,
+    device: torch.device,
+) -> torch.Tensor:
+    squared_norms = [
+        torch.linalg.vector_norm(
+            gradient,
+            dim=(-2, -1),
+            dtype=torch.float32,
+        ).square()
+        for gradient in gradients
+        if gradient is not None
+    ]
+    if not squared_norms:
+        return torch.zeros(norm_shape, device=device, dtype=torch.float32)
+    return torch.sqrt(sum(squared_norms))
+
+
+class _CaptureNextStateGradient(torch.autograd.Function):
+    """Capture the full adjoint of the state produced by one FW update."""
+
+    @staticmethod
+    def forward(ctx, fast_w0, fast_w1, fast_w2, master_w0, master_w1, master_w2, ratio_context):
+        ctx.ratio_context = ratio_context
+        ctx.norm_shape = fast_w0.shape[:-2]
+        ctx.device = fast_w0.device
+        return fast_w0, fast_w1, fast_w2, master_w0, master_w1, master_w2
+
+    @staticmethod
+    def backward(ctx, grad_fast_w0, grad_fast_w1, grad_fast_w2, grad_master_w0, grad_master_w1, grad_master_w2):
+        gradients = (
+            grad_fast_w0,
+            grad_fast_w1,
+            grad_fast_w2,
+            grad_master_w0,
+            grad_master_w1,
+            grad_master_w2,
+        )
+        ctx.ratio_context.next_state_grad_norm = _joint_state_grad_norm(
+            gradients,
+            norm_shape=ctx.norm_shape,
+            device=ctx.device,
+        )
+        return *gradients, None
+
+
+class _BoundPreviousStateGradient(torch.autograd.Function):
+    """Cap the full previous-state adjoint by the next-state adjoint norm."""
+
+    @staticmethod
+    def forward(ctx, fast_w0, fast_w1, fast_w2, master_w0, master_w1, master_w2, ratio_context):
+        ctx.ratio_context = ratio_context
+        ctx.norm_shape = fast_w0.shape[:-2]
+        ctx.device = fast_w0.device
+        return fast_w0, fast_w1, fast_w2, master_w0, master_w1, master_w2
+
+    @staticmethod
+    def backward(ctx, grad_fast_w0, grad_fast_w1, grad_fast_w2, grad_master_w0, grad_master_w1, grad_master_w2):
+        gradients = (
+            grad_fast_w0,
+            grad_fast_w1,
+            grad_fast_w2,
+            grad_master_w0,
+            grad_master_w1,
+            grad_master_w2,
+        )
+        next_state_grad_norm = ctx.ratio_context.next_state_grad_norm
+        if next_state_grad_norm is None:
+            raise RuntimeError("Next-state adjoint was not captured before previous-state backward")
+        previous_state_grad_norm = _joint_state_grad_norm(
+            gradients,
+            norm_shape=ctx.norm_shape,
+            device=ctx.device,
+        )
+        needs_clip = previous_state_grad_norm > _STATE_GRAD_RATIO_RHO * next_state_grad_norm
+        scale = torch.where(
+            needs_clip,
+            _STATE_GRAD_RATIO_RHO
+            * next_state_grad_norm
+            / previous_state_grad_norm.clamp_min(_STATE_GRAD_RATIO_EPS),
+            torch.ones_like(previous_state_grad_norm),
+        )
+        scale = scale[..., None, None]
+        clipped_gradients = tuple(
+            None if gradient is None else gradient * scale.to(gradient.dtype)
+            for gradient in gradients
+        )
+        return *clipped_gradients, None
 
 
 def zeropower_via_newtonschulz5(
@@ -308,6 +407,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         fw_share_init: bool = True,
         fw_norm_epsilon: float = 1e-5,
         clip_ns_grad_ratio: bool = True,
+        clip_state_grad_ratio: bool = True,
     ):
         super().__init__(
             num_heads=num_heads,
@@ -323,6 +423,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             raise ValueError(f"fw_muon_update_steps must be non-negative, got {fw_muon_update_steps}")
         self.fw_share_proj = fw_share_proj
         self.fw_share_init = fw_share_init
+        self.clip_state_grad_ratio = clip_state_grad_ratio
         self.memory_norm = nn.RMSNorm(hidden_dim, eps=fw_norm_epsilon)
         self.memory = FastWeightSwiGLU(
             hidden_dim,
@@ -433,17 +534,42 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         for clip_count in video_clip_counts:
             fast_weights, master_weights = self.init_fast_weights(batch_size=1)
             for video_clip_index in range(clip_count):
+                will_update = video_clip_index + 1 < clip_count
+                state_ratio_context = None
+                if will_update and self.clip_state_grad_ratio:
+                    state_ratio_context = _StateGradRatioContext()
+                    bounded_state = _BoundPreviousStateGradient.apply(
+                        *fast_weights,
+                        *master_weights,
+                        state_ratio_context,
+                    )
+                    group_fast_weights = bounded_state[:3]
+                    group_master_weights = bounded_state[3:]
+                else:
+                    group_fast_weights = fast_weights
+                    group_master_weights = master_weights
                 start, end = clip_slices[clip_index]
                 clip_hidden = hidden_states[start:end].unsqueeze(0)
-                clip_hidden, memory_input, key, target = self.apply_memory(clip_hidden, fast_weights)
-                if video_clip_index + 1 < clip_count:
+                clip_hidden, memory_input, key, target = self.apply_memory(
+                    clip_hidden,
+                    group_fast_weights,
+                )
+                if will_update:
                     fast_weights, master_weights = self.update_fast_weights(
                         memory_input,
                         key,
                         target,
-                        fast_weights,
-                        master_weights,
+                        group_fast_weights,
+                        group_master_weights,
                     )
+                    if state_ratio_context is not None:
+                        captured_state = _CaptureNextStateGradient.apply(
+                            *fast_weights,
+                            *master_weights,
+                            state_ratio_context,
+                        )
+                        fast_weights = captured_state[:3]
+                        master_weights = captured_state[3:]
                 outputs.append(clip_hidden.squeeze(0))
                 clip_index += 1
         if clip_index != len(clip_slices):
@@ -532,6 +658,7 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
                 "fw_share_init": config.fw_share_init,
                 "fw_norm_epsilon": config.fw_norm_epsilon,
                 "clip_ns_grad_ratio": config.clip_ns_grad_ratio,
+                "clip_state_grad_ratio": config.clip_state_grad_ratio,
             },
         )
         self._hf_prefix = "model.vision_tower."

@@ -49,6 +49,7 @@ def export_lact_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
         "fw_share_init",
         "fw_norm_epsilon",
         "clip_ns_grad_ratio",
+        "clip_state_grad_ratio",
     )
     hf_vision_config = config.setdefault("vision_config", {})
     hf_vision_config["model_type"] = "videochat3_lact_vision"

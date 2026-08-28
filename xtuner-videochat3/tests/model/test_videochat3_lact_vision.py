@@ -5,6 +5,9 @@ from torch.utils.checkpoint import checkpoint
 from xtuner.v1.model.compose.videochat3.modeling_vision_lact import (
     FastWeightSwiGLU,
     VideoChat3VisionLACTModel,
+    _BoundPreviousStateGradient,
+    _CaptureNextStateGradient,
+    _StateGradRatioContext,
     zeropower_via_newtonschulz5,
 )
 from xtuner.v1.model.compose.videochat3.videochat3_config import (
@@ -48,6 +51,48 @@ def _ns5_vjp(matrix, cotangent, *, clip_ns_grad_ratio):
     )
     (gradient,) = torch.autograd.grad(update, matrix, cotangent)
     return update.detach(), gradient
+
+
+def _state_tensors(*, requires_grad=True):
+    shapes = (
+        (2, 3, 4, 5),
+        (2, 3, 5, 4),
+        (2, 3, 4, 5),
+        (2, 3, 4, 5),
+        (2, 3, 5, 4),
+        (2, 3, 4, 5),
+    )
+    return tuple(torch.randn(shape, requires_grad=requires_grad) for shape in shapes)
+
+
+def _joint_state_norm(tensors):
+    return torch.sqrt(
+        sum(
+            torch.linalg.vector_norm(tensor.float(), dim=(-2, -1)).square()
+            for tensor in tensors
+        )
+    )
+
+
+def _state_ratio_vjp(previous_state, next_cotangents, direct_cotangents, multiplier):
+    ratio_context = _StateGradRatioContext()
+    bounded_previous = _BoundPreviousStateGradient.apply(
+        *previous_state,
+        ratio_context,
+    )
+    next_state = _CaptureNextStateGradient.apply(
+        *(multiplier * tensor for tensor in bounded_previous),
+        ratio_context,
+    )
+    loss = sum(
+        (tensor * cotangent).sum()
+        for tensor, cotangent in zip(next_state, next_cotangents)
+    )
+    loss = loss + sum(
+        (tensor * cotangent).sum()
+        for tensor, cotangent in zip(bounded_previous, direct_cotangents)
+    )
+    return next_state, torch.autograd.grad(loss, previous_state)
 
 
 def _reference_update(memory, key, target, learning_rates, fast_weights, master_weights, steps):
@@ -133,6 +178,102 @@ def test_ns5_ratio_clip_supports_checkpoint_recomputation():
         assert torch.all(gradient_norm <= input_norm * (1 + 1e-6))
 
 
+def test_state_ratio_clip_preserves_forward_and_bounds_full_previous_adjoint():
+    torch.manual_seed(5)
+    previous_state = _state_tensors()
+    next_cotangents = tuple(torch.randn_like(tensor) for tensor in previous_state)
+    direct_cotangents = tuple(torch.randn_like(tensor) for tensor in previous_state)
+    next_state, previous_gradients = _state_ratio_vjp(
+        previous_state,
+        next_cotangents,
+        direct_cotangents,
+        multiplier=4.0,
+    )
+
+    for actual, previous in zip(next_state, previous_state):
+        torch.testing.assert_close(actual, 4.0 * previous, rtol=0, atol=0)
+    next_norm = _joint_state_norm(next_cotangents)
+    previous_norm = _joint_state_norm(previous_gradients)
+    assert torch.all(previous_norm <= next_norm * (1 + 1e-6))
+
+    exact_gradients = tuple(
+        4.0 * next_cotangent + direct_cotangent
+        for next_cotangent, direct_cotangent in zip(
+            next_cotangents,
+            direct_cotangents,
+        )
+    )
+    exact_norm = _joint_state_norm(exact_gradients)
+    expected_scale = torch.where(
+        exact_norm > next_norm,
+        next_norm / exact_norm.clamp_min(1e-12),
+        torch.ones_like(exact_norm),
+    )[..., None, None]
+    for actual, exact in zip(previous_gradients, exact_gradients):
+        torch.testing.assert_close(
+            actual,
+            exact * expected_scale.to(exact.dtype),
+            rtol=1e-6,
+            atol=1e-6,
+        )
+
+
+def test_state_ratio_clip_is_exact_below_rho_and_handles_zero_next_adjoint():
+    torch.manual_seed(6)
+    previous_state = _state_tensors()
+    next_cotangents = tuple(torch.randn_like(tensor) for tensor in previous_state)
+    zero_direct = tuple(torch.zeros_like(tensor) for tensor in previous_state)
+    _, previous_gradients = _state_ratio_vjp(
+        previous_state,
+        next_cotangents,
+        zero_direct,
+        multiplier=0.5,
+    )
+    for actual, cotangent in zip(previous_gradients, next_cotangents):
+        torch.testing.assert_close(actual, 0.5 * cotangent, rtol=0, atol=0)
+
+    previous_state = _state_tensors()
+    zero_next = tuple(torch.zeros_like(tensor) for tensor in previous_state)
+    direct_cotangents = tuple(torch.randn_like(tensor) for tensor in previous_state)
+    _, previous_gradients = _state_ratio_vjp(
+        previous_state,
+        zero_next,
+        direct_cotangents,
+        multiplier=1.0,
+    )
+    assert all(torch.count_nonzero(gradient).item() == 0 for gradient in previous_gradients)
+
+
+def test_state_ratio_clip_supports_checkpoint_recomputation():
+    torch.manual_seed(8)
+    next_cotangents = _state_tensors(requires_grad=False)
+    for use_reentrant in (True, False):
+        previous_state = _state_tensors()
+
+        def transition(*state):
+            ratio_context = _StateGradRatioContext()
+            bounded_previous = _BoundPreviousStateGradient.apply(
+                *state,
+                ratio_context,
+            )
+            return _CaptureNextStateGradient.apply(
+                *(3.0 * tensor for tensor in bounded_previous),
+                ratio_context,
+            )
+
+        next_state = checkpoint(
+            transition,
+            *previous_state,
+            use_reentrant=use_reentrant,
+        )
+        torch.autograd.backward(next_state, next_cotangents)
+        next_norm = _joint_state_norm(next_cotangents)
+        previous_norm = _joint_state_norm(
+            tuple(tensor.grad for tensor in previous_state)
+        )
+        assert torch.all(previous_norm <= next_norm * (1 + 1e-6))
+
+
 def test_fused_fast_weight_update_matches_reference_formula():
     torch.manual_seed(3)
     memory = FastWeightSwiGLU(dim=8, inter_multi=2, num_heads=1, share_proj=True)
@@ -215,9 +356,17 @@ def test_lact_config_builds_separate_vision_model():
     assert config.model_type == "videochat3_lact_vision"
     assert isinstance(model, VideoChat3VisionLACTModel)
     assert config.clip_ns_grad_ratio is True
+    assert config.clip_state_grad_ratio is True
     assert all(block.memory.clip_ns_grad_ratio is True for block in model.encoder.blocks)
+    assert all(block.clip_state_grad_ratio is True for block in model.encoder.blocks)
     assert all(block.memory_gate.shape == (16,) for block in model.encoder.blocks)
     assert all(torch.count_nonzero(block.memory_gate).item() == 0 for block in model.encoder.blocks)
 
     unclipped = VideoChat3LACTVisionConfig(**_vision_kwargs(), clip_ns_grad_ratio=False).build()
     assert all(block.memory.clip_ns_grad_ratio is False for block in unclipped.encoder.blocks)
+
+    unclipped_state = VideoChat3LACTVisionConfig(
+        **_vision_kwargs(),
+        clip_state_grad_ratio=False,
+    ).build()
+    assert all(block.clip_state_grad_ratio is False for block in unclipped_state.encoder.blocks)
