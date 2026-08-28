@@ -151,6 +151,20 @@ class ResumeConfig(BaseModel):
     load_scheduler: bool = True
 
 
+class WandbConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    entity: str
+    project: str
+    name: str
+    base_url: str = "https://api.wandb.ai"
+    run_id: str | None = None
+    group: str | None = None
+    job_type: str = "train"
+    tags: list[str] = []
+    resume: Literal["allow", "must", "never", "auto"] = "allow"
+    mode: Literal["online", "offline", "disabled"] = "online"
+
+
 @runtime_checkable
 class CheckpointHookBase(Protocol):
     def __call__(
@@ -309,7 +323,8 @@ class TrainerConfig(BaseModel):
     snapshot_interval: int | None = None
     hf_interval: int | None = None
     hf_max_keep: int | None = None
-    exp_tracker: Literal["tensorboard", "jsonl"] = "jsonl"
+    exp_tracker: Literal["tensorboard", "jsonl", "wandb"] = "jsonl"
+    wandb_config: WandbConfig | None = None
     profile_step: list[int] | int | None = None
     profile_time: bool = True
     profile_memory: bool = False
@@ -329,6 +344,12 @@ class TrainerConfig(BaseModel):
             self.work_dir = Path(self.work_dir)
         elif self.work_dir is None:
             self.work_dir = Path.cwd()
+        return self
+
+    @model_validator(mode="after")
+    def _validate_tracker_config(self):
+        if self.exp_tracker == "wandb" and self.wandb_config is None:
+            raise ValueError("wandb_config is required when exp_tracker='wandb'")
         return self
 
     @field_serializer("grad_norm_dtype")
@@ -427,7 +448,8 @@ class Trainer:
         snapshot_interval: int | None = None,
         hf_interval: int | None = None,
         hf_max_keep: int | None = None,
-        exp_tracker: Literal["tensorboard", "jsonl"] = "jsonl",
+        exp_tracker: Literal["tensorboard", "jsonl", "wandb"] = "jsonl",
+        wandb_config: WandbConfig | None = None,
         profile_step: list[int] | int | None = None,
         profile_time: bool = True,
         profile_memory: bool = False,
@@ -452,6 +474,7 @@ class Trainer:
         self._cur_step = 0
 
         self._trainer_cfg = trainer_cfg
+        self._wandb_config = wandb_config
 
         self._micro_batch_size: int | None = None
         if skip_checkpoint_validation:
@@ -623,6 +646,7 @@ class Trainer:
             hf_interval=config.hf_interval,
             hf_max_keep=config.hf_max_keep,
             exp_tracker=config.exp_tracker,
+            wandb_config=config.wandb_config,
             profile_step=config.profile_step,
             profile_time=config.profile_time,
             profile_memory=config.profile_memory,
@@ -842,9 +866,31 @@ class Trainer:
         logger.add(sys.stderr, format=log_format(rank=get_rank()))
         return logger, log_dir
 
-    def _init_tracker(self, exp_tracker: Literal["tensorboard", "jsonl"], log_dir: Path):
-        writer = get_writer(writer_type=exp_tracker, log_dir=log_dir)
-        return writer
+    def _init_tracker(
+        self,
+        exp_tracker: Literal["tensorboard", "jsonl", "wandb"],
+        log_dir: Path,
+    ):
+        if exp_tracker != "wandb":
+            return get_writer(writer_type=exp_tracker, log_dir=log_dir)
+        if self.rank != 0:
+            return get_writer(writer_type="jsonl", log_dir=log_dir)
+        if self._wandb_config is None:
+            raise RuntimeError("wandb_config is required for W&B tracking")
+
+        run_config = {
+            "world_size": self.world_size,
+            "rank": self.rank,
+        }
+        if self._trainer_cfg is not None:
+            run_config["trainer"] = self._trainer_cfg.model_dump(mode="json", exclude={"wandb_config"})
+        writer_kwargs = self._wandb_config.model_dump(mode="json")
+        writer_kwargs["config"] = run_config
+        return get_writer(
+            writer_type="wandb",
+            log_dir=log_dir,
+            writer_kwargs=writer_kwargs,
+        )
 
     def _init_data_mesh(
         self,
@@ -1359,6 +1405,7 @@ class Trainer:
             "time/eta_seconds": round(eta_seconds, 1),
             "runtime_info/text_tokens": step_consumed_tokens,
             "runtime_info/total_consumed_tokens": total_consumed_tokens,
+            "runtime_info/consumed_samples": self._consumed_samples,
             "runtime_info/tgs": tgs,
             "runtime_info/e2e_tgs": e2e_tgs,
             "memory/max_memory_GB": round(max_memory / (1024**3), 3),

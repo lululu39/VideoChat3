@@ -48,6 +48,8 @@
 - LACT builds and HF saves use an independent `videochat3_lact` model with a `videochat3_lact_vision` encoder. They inherit all non-vision behavior, preserve original key names/processor assets, export custom `auto_map` code, and support strict XTuner resume plus VLMEvalKit/Transformers loading; `hf_interval` can remain enabled.
 - The retained initialization checkpoint is `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init` (9.1 GiB). `initialization_validation.json` confirms all 734 original tensors are bitwise equal, all 270 added tensors are FW-only, and 27/27 layers satisfy Q/K/V/O share-init plus zero gate.
 - `scripts/benchmark_videochat3_lact.py` records isolated BF16/FlashAttention H100 timings. For an 8-frame, 16x16 patch-grid video, LACT vision is about 5.5x slower, but full-VLM latency falls from 2.78x at 641 tokens to 2.00x/1.30x/1.04x at 2,177/8,321/32,897 tokens; see `benchmark_h100_long_context.json`. Zero gate does not bypass FW apply/update compute.
+- Launch Stage 3 vision-only training with `training_scripts/stage3/VideoChat3_4B_LACT_VE_train_stage3.sh`. It uses the retained LACT init plus the 17-dataset local lightweight manifest and logs rank-zero metrics to the public `LVSM-Experiment/videochat3` W&B project as `vc3-4b-lact-fw4-ve-s3-lite-v1`, with JSONL retained on every rank.
+- The LACT training launcher pins `WANDB_BASE_URL=https://api.wandb.ai`; it ignores the machine's Adobe-internal `WANDB_API_KEY` and uses the public netrc login, or `WANDB_PUBLIC_API_KEY` when explicitly supplied. Keep the run ID stable for auto-resume and change both name/ID for a new experiment version.
 
 ## VideoMamba ViT/LACT Comparison
 
