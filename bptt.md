@@ -100,10 +100,127 @@ J_t^\top b_t
 \left(I+H_t^\top P_t^\top\right)N_t^\top b_t.
 $$
 
-这里的 $I$ 是 residual state 分支，$H_t^\top P_t^\top$ 是经过 FW update 的分支。
-把连续多个括号展开后会得到许多路径；连续选择 FW update 分支的路径会包含多个
-$P_t^\top$，也就是多个 NS5 backward。局部 NS5 amplification ratio $r_t$ 的乘积
-描述的是这些路径中的 NS5 因素，而不是完整 $J_t$ 的全部增益。
+下面把真正的 $a_t\rightarrow a_{t-1}$ 完整拆开。定义当前 group 直接从输出进入
+$S_{t-1}$ 的梯度为：
+
+$$
+d_t
+=
+\left(\frac{\partial y_t}{\partial S_{t-1}}\right)^\top
+\frac{\partial L}{\partial y_t}.
+$$
+
+然后依次定义 future gradient 经过 Normalize 和 NS5 backward 后的中间梯度：
+
+$$
+\begin{aligned}
+c_t &= N_t^\top a_t, \\
+e_t &= P_t^\top c_t.
+\end{aligned}
+$$
+
+这里 $c_t$ 同时进入加法节点的 residual state 分支和 $U_t$ 分支，所以它也就是
+$\bar U_t$；$e_t$ 是 NS5 传给 $G_t$ 的梯度，所以它也就是 $\bar G_t$。完整单步
+backward 为：
+
+$$
+\boxed{
+\begin{aligned}
+a_{t-1}
+&=d_t+J_t^\top a_t \\
+&=d_t+\left(I+H_t^\top P_t^\top\right)N_t^\top a_t \\
+&=d_t+\underbrace{c_t}_{\text{residual state branch}}
++\underbrace{H_t^\top e_t}_{\text{FW update branch}}.
+\end{aligned}
+}
+$$
+
+现在定义 NS5 在这一次实际上游梯度方向上的 amplification ratio：
+
+$$
+r_t=\frac{\lVert e_t\rVert_F}{\lVert c_t\rVert_F}.
+$$
+
+当 $r_t>0$ 时，令 $\widetilde e_t=e_t/r_t$，于是
+$\lVert\widetilde e_t\rVert_F=\lVert c_t\rVert_F$。上面的单步公式可以原样改写为：
+
+$$
+\boxed{
+a_{t-1}
+=
+d_t+c_t+r_tH_t^\top\widetilde e_t.
+}
+$$
+
+这就是 $r_t$ 在 $a_t\rightarrow a_{t-1}$ 中的准确位置：它只乘在 FW update
+分支上，既不乘 residual state 分支 $c_t$，也不乘当前 group 的直接梯度 $d_t$。
+$r_t$ 不是 forward 中的模型参数，而是把实际向量 $P_t^\top c_t$ 的范数变化提取成
+一个标量后的记法。
+
+开启 ratio clipping 后，只有这一项发生变化：
+
+$$
+\widehat r_t=\min(r_t,\rho),
+\qquad
+a_{t-1}^{\mathrm{clipped}}
+=
+d_t+c_t+\widehat r_tH_t^\top\widetilde e_t.
+$$
+
+再展开两个 time step。令：
+
+$$
+B_t=\left(I+H_t^\top P_t^\top\right)N_t^\top,
+$$
+
+则：
+
+$$
+\begin{aligned}
+a_{t-2}
+&=d_{t-1}+B_{t-1}a_{t-1} \\
+&=d_{t-1}+B_{t-1}d_t+B_{t-1}B_ta_t.
+\end{aligned}
+$$
+
+$B_{t-1}B_ta_t$ 完整展开成四条路径：
+
+$$
+\begin{aligned}
+B_{t-1}B_ta_t
+={}&
+\underbrace{N_{t-1}^\top N_t^\top a_t}_{\text{residual, residual}}
+\\
+&+\underbrace{
+N_{t-1}^\top H_t^\top P_t^\top N_t^\top a_t
+}_{\text{residual at }t-1,\ \text{FW at }t}
+\\
+&+\underbrace{
+H_{t-1}^\top P_{t-1}^\top N_{t-1}^\top N_t^\top a_t
+}_{\text{FW at }t-1,\ \text{residual at }t}
+\\
+&+\underbrace{
+H_{t-1}^\top P_{t-1}^\top N_{t-1}^\top
+H_t^\top P_t^\top N_t^\top a_t
+}_{\text{FW at }t-1,\ \text{FW at }t}.
+\end{aligned}
+$$
+
+反向从右向左经过这条路径时，会先经过 $P_t^\top$，产生局部倍率 $r_t$；随后经过
+$P_{t-1}^\top$，产生该路径实际输入方向上的局部倍率 $r_{t-1}$。因此这条路径的总范数
+倍率包含：
+
+$$
+\left(h_{t-1}r_{t-1}n_{t-1}\right)
+\left(h_tr_tn_t\right),
+$$
+
+其中 $n_t$ 和 $h_t$ 分别是 $N_t^\top$ 与 $H_t^\top$ 在该路径实际梯度方向上的
+范数倍率。连续 $T$ 次都选择 FW 分支时，就会出现 $\prod_t r_t$，同时还包含
+$\prod_t n_t$ 和 $\prod_t h_t$。
+
+把连续多个括号完整展开会得到许多 residual/FW 路径。局部 NS5 amplification ratio
+$r_t$ 的乘积只描述连续 FW 路径中的 NS5 因素，而不是完整 $J_t$ 的全部增益。
 
 纯文本：完整 transition 的 $q_t$ 沿一条纯 future chain 连乘是严格等式；NS5 的
 $r_t$ 只是在展开后某条路径中的局部因素。实际 BPTT 还会加上各 group 的直接 loss
