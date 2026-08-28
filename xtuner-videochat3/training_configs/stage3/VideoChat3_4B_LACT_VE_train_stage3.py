@@ -10,7 +10,10 @@ from xtuner.v1.model import VideoChat3LACTDense4BConfig
 from xtuner.v1.train import ResumeConfig, TrainerConfig, WandbConfig
 
 
-run_name = os.getenv("WANDB_NAME", "vc3-4b-lact-fw4-ve-s3-lite-8xh100-gb16-v1")
+run_name = os.getenv(
+    "WANDB_NAME",
+    "vc3-4b-lact-fw4-ve-s3-lite-8xh100-gb16-f128-s16k-v1",
+)
 model_path = Path("/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init")
 metadata_path = Path(
     "/mnt/localssd/dataset/VideoChat3/VideoChat3-Stage3-Training-Data/VideoChat3_Stage3_Training_Data_local.json"
@@ -20,8 +23,11 @@ cache_dir = Path("dataset_cache/cache_videochat3_4B_lact_stage3")
 
 model_cfg = VideoChat3LACTDense4BConfig()
 
-sample_max_length = 16384 * 6
-pack_max_length = 16384 * 6
+sample_max_length = 16384
+pack_max_length = 16384
+frame_max_pixels = 224 * 224
+video_max_total_pixels = 128 * frame_max_pixels
+video_max_frames = 128
 reference_global_batch_size = 128
 global_batch_size = 16
 total_epoch = 1
@@ -59,13 +65,19 @@ for name, data in dataset_collections.items():
                     int(sample_max_length * 0.8 * 28 * 28),
                 ),
                 frame_min_pixels=data.get("frame_min_pixels", 28 * 28),
-                frame_max_pixels=data.get("frame_max_pixels", 448 * 448),
-                video_max_total_pixels=data.get(
-                    "video_max_total_pixels",
-                    int(sample_max_length * 0.8 * 4 * 28 * 28),
+                frame_max_pixels=min(
+                    data.get("frame_max_pixels", frame_max_pixels),
+                    frame_max_pixels,
+                ),
+                video_max_total_pixels=min(
+                    data.get("video_max_total_pixels", video_max_total_pixels),
+                    video_max_total_pixels,
                 ),
                 video_min_frames=data.get("video_min_frames", 1),
-                video_max_frames=data.get("video_max_frames", 3600),
+                video_max_frames=min(
+                    data.get("video_max_frames", video_max_frames),
+                    video_max_frames,
+                ),
                 fixed_num_sampled_frames=data.get("fixed_num_sampled_frames"),
                 video_sample_fps=data.get("video_sample_fps", 2),
                 processor_path=str(model_path),
