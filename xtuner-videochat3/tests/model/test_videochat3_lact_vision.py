@@ -146,6 +146,10 @@ def test_fast_state_updates_later_clip_and_resets_at_video_boundary():
 
 
 def test_lact_config_builds_separate_vision_model():
-    model = VideoChat3LACTVisionConfig(**_vision_kwargs()).build()
+    config = VideoChat3LACTVisionConfig(**_vision_kwargs())
+    model = config.build()
+    model.init_weights()
+    assert config.model_type == "videochat3_lact_vision"
     assert isinstance(model, VideoChat3VisionLACTModel)
     assert all(block.memory_gate.shape == (16,) for block in model.encoder.blocks)
+    assert all(torch.count_nonzero(block.memory_gate).item() == 0 for block in model.encoder.blocks)

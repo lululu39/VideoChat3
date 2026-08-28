@@ -16,7 +16,7 @@ from .modeling_vision import init_world_mesh
 from .modeling_projector import VideoChat3MultiModalProjector
 from typing_extensions import override
 from xtuner.v1.config import FSDPConfig
-from .videochat3_config import VideoChat3BaseConfig
+from .videochat3_config import VideoChat3BaseConfig, VideoChat3LACTVisionConfig
 from xtuner.v1.float8.float8_handler import Float8Handler
 from xtuner.v1.loss import CELossContext
 from torch.distributed.fsdp import (
@@ -141,6 +141,21 @@ class VideoChat3ForConditionalGeneration(BaseModel):
             if missing:
                 raise RuntimeError(f"Missing parameters from {hf_path}: {list(missing)}. ")
 
+    @override
+    def save_hf(
+        self,
+        hf_dir: str | Path,
+        save_dtype: torch.dtype = torch.bfloat16,
+    ) -> None:
+        super().save_hf(hf_dir=hf_dir, save_dtype=save_dtype)
+        if isinstance(self.config.vision_config, VideoChat3LACTVisionConfig):
+            if not dist.is_initialized() or dist.get_rank() == 0:
+                from .hf_lact_export import export_lact_hf_artifacts
+
+                export_lact_hf_artifacts(hf_dir, self.config)
+            if dist.is_initialized():
+                dist.barrier()
+
     def scale_and_reduce_grad(self):
         self.language_model.scale_and_reduce_grad()
 
@@ -224,3 +239,17 @@ class VideoChat3ForConditionalGeneration(BaseModel):
         self.vision_tower.init_weights()
         self.language_model.init_weights()
         self.multi_modal_projector.init_weights()
+
+
+class VideoChat3LACTForConditionalGeneration(
+    VideoChat3ForConditionalGeneration
+):
+    """VideoChat3 with the dedicated recurrent LACT vision encoder."""
+
+    def __init__(self, config: VideoChat3BaseConfig):
+        if not isinstance(config.vision_config, VideoChat3LACTVisionConfig):
+            raise TypeError(
+                "VideoChat3LACTForConditionalGeneration requires a "
+                "VideoChat3LACTVisionConfig"
+            )
+        super().__init__(config)

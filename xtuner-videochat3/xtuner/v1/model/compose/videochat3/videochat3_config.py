@@ -50,7 +50,7 @@ class VideoChat3VisionConfig(BaseModel):
 
 
 class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
-    model_type: str = "moonvit_lact"
+    model_type: str = "videochat3_lact_vision"
     fw_inter_multi: float = 2.0
     fw_num_heads: int = 1
     fw_base_lr: float = 0.01
@@ -177,6 +177,7 @@ class VideoChat3Dense4BConfig(VideoChat3BaseConfig):
 
 
 class VideoChat3LACTDense4BConfig(VideoChat3BaseConfig):
+    model_type: str = "videochat3_lact"
     vision_config: VideoChat3LACTVisionConfig = VideoChat3LACTVisionConfig(
         attn_impl="flash_attention_2"
     )
@@ -188,12 +189,17 @@ class VideoChat3LACTDense4BConfig(VideoChat3BaseConfig):
     freeze_projector: bool = True
     freeze_language: bool = True
 
+    def build(self) -> "VideoChat3LACTForConditionalGeneration":
+        from .modeling_videochat3 import (
+            VideoChat3LACTForConditionalGeneration,
+        )
+
+        return VideoChat3LACTForConditionalGeneration(self)
+
     @property
     def hf_config(self):
-        logger.warning(
-            f"{type(self)} retains the original Hugging Face config when saving; "
-            "resume VideoChat3 LACT checkpoints with this XTuner config."
-        )
+        # The save hook copies the original processor assets, then exports a
+        # self-contained VideoChat3-LACT config and modeling implementation.
         return None
 
 class VideoChat3Dense4BT1Config(VideoChat3BaseConfig):

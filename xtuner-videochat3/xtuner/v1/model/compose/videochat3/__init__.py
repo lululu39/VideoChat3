@@ -1,5 +1,8 @@
 from .modeling_projector import VideoChat3MultiModalProjector
-from .modeling_videochat3 import VideoChat3ForConditionalGeneration
+from .modeling_videochat3 import (
+    VideoChat3ForConditionalGeneration,
+    VideoChat3LACTForConditionalGeneration,
+)
 from .modeling_vision import VideoChat3VisionModel
 from .modeling_vision_lact import VideoChat3VisionLACTModel
 from .videochat3_config import (
@@ -17,6 +20,7 @@ from .videochat3_config import (
 
 __all__ = [
     "VideoChat3ForConditionalGeneration",
+    "VideoChat3LACTForConditionalGeneration",
     "VideoChat3VisionModel",
     "VideoChat3VisionLACTModel",
     "VideoChat3Dense8BConfig",

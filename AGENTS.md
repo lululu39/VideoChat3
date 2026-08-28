@@ -45,6 +45,7 @@
 - The fast-weight SwiGLU, prediction error, token-wise softplus rates, FP32 master weights, and Muon/Newton-Schulz update match VideoLACT. Private Q/K/V/O projections share-init from the loaded attention weights and a zero-initialized memory gate makes the initial output exactly match pretrained VideoChat3.
 - The implementation fuses the three within-layer gradient GEMMs and Muon batches. It keeps the FSDP-compatible layer-major schedule; cross-layer grouped updates are intentionally not used with separately sharded vision blocks.
 - `VideoChat3LACTDense4BConfig` loads the original 4B checkpoint with missing LACT weights initialized as above, freezes the LM/projector, and trains the entire vision encoder. Planned data is Stage 3 LV + OL, optionally a small still-undecided Academic2M mix.
+- LACT builds and HF saves use an independent `videochat3_lact` model with a `videochat3_lact_vision` encoder. They inherit all non-vision behavior, preserve original key names/processor assets, export custom `auto_map` code, and support strict XTuner resume plus VLMEvalKit/Transformers loading; `hf_interval` can remain enabled.
 
 ## VideoMamba ViT/LACT Comparison
 

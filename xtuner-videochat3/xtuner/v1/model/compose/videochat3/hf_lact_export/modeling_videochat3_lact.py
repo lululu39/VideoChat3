@@ -1,21 +1,27 @@
 import math
-from pathlib import Path
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing_extensions import override
 
+from transformers import AutoModel
 from transformers.activations import ACT2FN
-from xtuner.v1.model import BaseModel
 
-from .modeling_vision import (
+from .configuration_videochat3_lact import (
+    VideoChat3LACTConfig,
+    VideoChat3LACTVisionConfig,
+)
+from .modeling_videochat3 import (
+    Rope2DPosEmb,
+    VideoChat3ForConditionalGeneration,
+    VideoChat3Model,
+    VideoChat3MultiModalProjector,
+    VideoChat3PreTrainedModel,
     VideoChat3VisionLayer,
-    VideoChat3VisionModel,
     VideoChat3VisionPatchEmbed,
+    VideoChat3VisionPreTrainedModel,
     patch_merger,
 )
-from .videochat3_config import VideoChat3LACTVisionConfig
 
 
 def inverse_softplus(value: float) -> float:
@@ -45,7 +51,7 @@ def zeropower_via_newtonschulz5(matrix: torch.Tensor, steps: int = 5) -> torch.T
 
 
 class FastWeightSwiGLU(nn.Module):
-    """VideoLACT multi-head SwiGLU fast weights with optional private projections."""
+    """VideoLACT multi-head SwiGLU fast weights."""
 
     def __init__(
         self,
@@ -78,7 +84,6 @@ class FastWeightSwiGLU(nn.Module):
             self.output_proj = nn.Linear(dim, dim, bias=False)
         self.apply_norm = nn.RMSNorm(dim, eps=norm_epsilon, elementwise_affine=False)
         self.output_norm = nn.RMSNorm(dim, eps=norm_epsilon, elementwise_affine=False)
-
         self.w0 = nn.Parameter(torch.empty(num_heads, self.head_dim, self.hidden_dim))
         self.w1 = nn.Parameter(torch.empty(num_heads, self.hidden_dim, self.head_dim))
         self.w2 = nn.Parameter(torch.empty(num_heads, self.head_dim, self.hidden_dim))
@@ -161,7 +166,11 @@ class FastWeightSwiGLU(nn.Module):
 
         error = (target.float() - output.float()) / seq_len
         error_heads = error.reshape(batch_size, seq_len, self.num_heads, self.head_dim)
-        d_hidden = torch.einsum("blhd,bhdk->blhk", error_heads, w1.float().transpose(-1, -2))
+        d_hidden = torch.einsum(
+            "blhd,bhdk->blhk",
+            error_heads,
+            w1.float().transpose(-1, -2),
+        )
         d_up = d_hidden * F.silu(gate)
         d_gate = d_hidden * up
         sigmoid = torch.sigmoid(gate)
@@ -211,7 +220,13 @@ class FastWeightSwiGLU(nn.Module):
 
         transpose_w02 = self.head_dim > self.hidden_dim
         if transpose_w02:
-            muon_gradients = torch.stack((w0_grad.transpose(-1, -2), w1_grad, w2_grad.transpose(-1, -2)))
+            muon_gradients = torch.stack(
+                (
+                    w0_grad.transpose(-1, -2),
+                    w1_grad,
+                    w2_grad.transpose(-1, -2),
+                )
+            )
         else:
             muon_gradients = torch.stack((w0_grad, w1_grad.transpose(-1, -2), w2_grad))
         muon_updates = zeropower_via_newtonschulz5(muon_gradients.flatten(0, 2), muon_update_steps).reshape_as(
@@ -234,7 +249,7 @@ class FastWeightSwiGLU(nn.Module):
 
 
 class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
-    """Original 4-frame attention followed by recurrent VideoLACT fast weights."""
+    """Original four-frame attention followed by VideoLACT fast weights."""
 
     def __init__(
         self,
@@ -242,7 +257,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         hidden_dim: int,
         mlp_dim: int,
         *,
-        attn_impl: str = "eager_attention",
+        attn_impl: str = "eager",
         activation=F.gelu,
         attn_bias: bool = False,
         fw_inter_multi: float = 2,
@@ -261,10 +276,6 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             activation=activation,
             attn_bias=attn_bias,
         )
-        if fw_base_lr <= 0:
-            raise ValueError(f"fw_base_lr must be positive, got {fw_base_lr}")
-        if fw_muon_update_steps < 0:
-            raise ValueError(f"fw_muon_update_steps must be non-negative, got {fw_muon_update_steps}")
         self.fw_share_proj = fw_share_proj
         self.fw_share_init = fw_share_init
         self.memory_norm = nn.RMSNorm(hidden_dim, eps=fw_norm_epsilon)
@@ -293,10 +304,10 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         if self.value_proj is not None:
             nn.init.trunc_normal_(self.value_proj.weight, std=0.02)
         if self.fw_share_init and not self.fw_share_proj:
-            query_weight, key_weight, value_weight = self.wqkv.weight.detach().chunk(3, dim=0)
-            self.memory.apply_proj[0].weight.copy_(query_weight)
-            self.memory.update_proj[0].weight.copy_(key_weight)
-            self.value_proj.weight.copy_(value_weight)
+            query, key, value = self.wqkv.weight.detach().chunk(3, dim=0)
+            self.memory.apply_proj[0].weight.copy_(query)
+            self.memory.update_proj[0].weight.copy_(key)
+            self.value_proj.weight.copy_(value)
             self.memory.output_proj.weight.copy_(self.wo.weight.detach())
 
     def init_fast_weights(self, batch_size: int):
@@ -316,19 +327,18 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
     ) -> torch.Tensor:
         residual = hidden_states
         hidden_states = self.norm0(hidden_states)
-        attention = self.attention_qkvpacked(hidden_states, cu_seqlens, rope_freqs_cis=rope_freqs_cis)
+        attention = self.attention_qkvpacked(
+            hidden_states,
+            cu_seqlens,
+            rope_freqs_cis=rope_freqs_cis,
+        )
         return residual + attention
 
-    def apply_memory(
-        self,
-        hidden_states: torch.Tensor,
-        fast_weights,
-    ):
+    def apply_memory(self, hidden_states: torch.Tensor, fast_weights):
         memory_input = self.memory_norm(hidden_states)
         if self.fw_share_proj:
             query, key, target = self._shared_qkv(memory_input)
-            memory_output = self.memory(query, fast_weights)
-            memory_output = self.wo(memory_output)
+            memory_output = self.wo(self.memory(query, fast_weights))
         else:
             key = target = memory_input
             memory_output = self.memory(memory_input, fast_weights)
@@ -411,9 +421,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
 class VideoChat3LACTVisionEncoder(nn.Module):
     def __init__(self, hidden_dim: int, num_layers: int, block_cfg: dict):
         super().__init__()
-        from .modeling_vision import Rope2DPosEmb
-
-        self.rope_2d = Rope2DPosEmb(block_cfg["hidden_dim"] // block_cfg["num_heads"], 512, 512)
+        self.rope_2d = Rope2DPosEmb(block_cfg["hidden_dim"] // block_cfg["num_heads"], 1024, 1024)
         self.blocks = nn.ModuleList([VideoChat3LACTVisionLayer(**block_cfg) for _ in range(num_layers)])
         self.final_layernorm = nn.LayerNorm(hidden_dim)
 
@@ -432,7 +440,6 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         cu_seqlens = torch.tensor(offsets, device=hidden_states.device, dtype=torch.int32)
         if sum(video_clip_counts) != len(clip_slices):
             raise ValueError(f"video_clip_counts={video_clip_counts} do not cover {len(clip_slices)} clips")
-
         for block in self.blocks:
             hidden_states = block(
                 hidden_states,
@@ -444,11 +451,12 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         return self.final_layernorm(hidden_states)
 
 
-class VideoChat3VisionLACTModel(VideoChat3VisionModel):
-    config: VideoChat3LACTVisionConfig
+class VideoChat3LACTVisionModel(VideoChat3VisionPreTrainedModel):
+    config_class = VideoChat3LACTVisionConfig
+    _no_split_modules = ["VideoChat3LACTVisionLayer"]
 
     def __init__(self, config: VideoChat3LACTVisionConfig):
-        BaseModel.__init__(self)
+        super().__init__(config)
         self.config = config
         self.patch_embed = VideoChat3VisionPatchEmbed(
             out_dim=config.hidden_size,
@@ -476,63 +484,17 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
                 "fw_norm_epsilon": config.fw_norm_epsilon,
             },
         )
-        self._hf_prefix = "model.vision_tower."
-        self._init_load_spec()
-
-    @staticmethod
-    def _is_lact_state_key(key: str) -> bool:
-        return any(
-            token in key
-            for token in (
-                ".memory_norm.",
-                ".memory.",
-                ".memory_gate",
-                ".lr_proj.",
-                ".value_proj.",
-            )
-        )
-
-    def _lact_local_keys(self) -> set[str]:
-        return {key for key in self.state_dict() if self._is_lact_state_key(key)}
-
-    def _lact_hf_keys(self) -> set[str]:
-        return {hf_key for key in self._lact_local_keys() for hf_key in self.to_hf_key_list(key)}
+        self.post_init()
+        self.reset_lact_parameters()
 
     @torch.no_grad()
     def reset_lact_parameters(self) -> None:
         for block in self.encoder.blocks:
             block.reset_lact_parameters()
 
-    @torch.no_grad()
-    @override
-    def init_weights(self) -> None:
-        from xtuner.v1.utils import default_init_weights
-
-        default_init_weights(self)
-        self.patch_embed.pos_emb.reset_parameters()
-        self.reset_lact_parameters()
-
-    @override
-    def from_hf(self, hf_path: str | Path, strict: bool = True) -> tuple:
-        loaded, unloaded, missing = super().from_hf(hf_path, strict=False)
-        lact_hf_keys = self._lact_hf_keys()
-        missing_lact = missing & lact_hf_keys
-        if missing_lact:
-            if missing_lact != lact_hf_keys:
-                raise RuntimeError(
-                    f"Checkpoint contains only a partial VideoChat3 LACT memory state: missing={sorted(missing_lact)}"
-                )
-            self.reset_lact_parameters()
-        missing_base = missing - lact_hf_keys
-        if strict and missing_base:
-            raise RuntimeError(f"Missing baseline vision parameters: {sorted(missing_base)}")
-        unloaded = unloaded - self._lact_local_keys()
-        return loaded, unloaded, missing_base
-
     @staticmethod
     def split_grid_thws_clip_by_clip_with_counts(
-        grid_thws: torch.Tensor,
-        temporal_merge_size: int,
+        grid_thws: torch.Tensor, temporal_merge_size: int
     ) -> tuple[torch.Tensor, list[int]]:
         split_grids = []
         video_clip_counts = []
@@ -553,13 +515,9 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
         )
 
     def forward(self, pixel_values: torch.Tensor, grid_thws: torch.Tensor):
-        expected_tokens = int((grid_thws[:, 0] * grid_thws[:, 1] * grid_thws[:, 2]).sum())
         split_grid_thws, video_clip_counts = self.split_grid_thws_clip_by_clip_with_counts(
             grid_thws, self.config.temporal_merge_size
         )
-        actual_tokens = int((split_grid_thws[:, 0] * split_grid_thws[:, 1] * split_grid_thws[:, 2]).sum())
-        if expected_tokens != actual_tokens:
-            raise ValueError(f"Split grid changed token count: {expected_tokens} != {actual_tokens}")
         hidden_states = self.patch_embed(pixel_values, split_grid_thws)
         hidden_states = self.encoder(hidden_states, split_grid_thws, video_clip_counts)
         return patch_merger(
@@ -567,3 +525,36 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
             split_grid_thws,
             merge_kernel_size=self.config.merge_kernel_size,
         )
+
+
+class VideoChat3LACTModel(VideoChat3Model):
+    config_class = VideoChat3LACTConfig
+
+    def __init__(self, config: VideoChat3LACTConfig):
+        VideoChat3PreTrainedModel.__init__(self, config)
+        self.vision_tower = VideoChat3LACTVisionModel._from_config(config.vision_config)
+        self.multi_modal_projector = VideoChat3MultiModalProjector(config)
+        self.language_model = AutoModel.from_config(config.text_config, trust_remote_code=True)
+        self.post_init()
+
+
+class VideoChat3LACTForConditionalGeneration(VideoChat3ForConditionalGeneration):
+    config_class = VideoChat3LACTConfig
+
+    def __init__(self, config: VideoChat3LACTConfig):
+        VideoChat3PreTrainedModel.__init__(self, config)
+        self.model = VideoChat3LACTModel(config)
+        self.lm_head = nn.Linear(
+            config.text_config.hidden_size,
+            config.text_config.vocab_size,
+            bias=False,
+        )
+        self.post_init()
+
+
+__all__ = [
+    "FastWeightSwiGLU",
+    "VideoChat3LACTForConditionalGeneration",
+    "VideoChat3LACTModel",
+    "VideoChat3LACTVisionModel",
+]
