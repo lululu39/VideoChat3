@@ -1,5 +1,6 @@
 import torch
 import torch.nn.functional as F
+from torch.utils.checkpoint import checkpoint
 
 from xtuner.v1.model.compose.videochat3.modeling_vision_lact import (
     FastWeightSwiGLU,
@@ -39,6 +40,16 @@ def _copy_baseline_weights(baseline, lact):
         block.reset_lact_parameters()
 
 
+def _ns5_vjp(matrix, cotangent, *, clip_ns_grad_ratio):
+    matrix = matrix.clone().requires_grad_(True)
+    update = zeropower_via_newtonschulz5(
+        matrix,
+        clip_ns_grad_ratio=clip_ns_grad_ratio,
+    )
+    (gradient,) = torch.autograd.grad(update, matrix, cotangent)
+    return update.detach(), gradient
+
+
 def _reference_update(memory, key, target, learning_rates, fast_weights, master_weights, steps):
     w0, w1, w2 = fast_weights
     master_w0, master_w1, master_w2 = master_weights
@@ -68,6 +79,58 @@ def _reference_update(memory, key, target, learning_rates, fast_weights, master_
     )
     fast_weights = tuple(F.normalize(weight, dim=2, eps=1e-5).to(w0.dtype) for weight in master_weights)
     return fast_weights, master_weights
+
+
+def test_ns5_ratio_clip_preserves_forward_and_bounds_each_matrix_vjp():
+    torch.manual_seed(1)
+    matrix = torch.randn(3, 5, 7) * 1e-3
+    cotangent = torch.randn_like(matrix)
+
+    exact_update, exact_gradient = _ns5_vjp(matrix, cotangent, clip_ns_grad_ratio=False)
+    clipped_update, clipped_gradient = _ns5_vjp(matrix, cotangent, clip_ns_grad_ratio=True)
+    torch.testing.assert_close(clipped_update, exact_update, rtol=0, atol=0)
+
+    actual_cotangent = cotangent.to(clipped_update.dtype)
+    input_norm = torch.linalg.vector_norm(actual_cotangent.float(), dim=(-2, -1))
+    clipped_norm = torch.linalg.vector_norm(clipped_gradient.float(), dim=(-2, -1))
+    assert torch.all(clipped_norm <= input_norm * (1 + 1e-6))
+
+    exact_norm = torch.linalg.vector_norm(exact_gradient.float(), dim=(-2, -1), keepdim=True)
+    input_norm = input_norm[:, None, None]
+    expected_scale = torch.where(
+        exact_norm > input_norm,
+        input_norm / exact_norm.clamp_min(1e-12),
+        torch.ones_like(exact_norm),
+    )
+    torch.testing.assert_close(clipped_gradient, exact_gradient * expected_scale, rtol=1e-6, atol=1e-7)
+
+
+def test_ns5_ratio_clip_is_exact_below_rho_and_handles_zero_cotangent():
+    torch.manual_seed(2)
+    matrix = torch.randn(2, 4, 6)
+    cotangent = torch.randn_like(matrix)
+    _, exact_gradient = _ns5_vjp(matrix, cotangent, clip_ns_grad_ratio=False)
+    _, clipped_gradient = _ns5_vjp(matrix, cotangent, clip_ns_grad_ratio=True)
+    torch.testing.assert_close(clipped_gradient, exact_gradient, rtol=0, atol=0)
+
+    _, zero_gradient = _ns5_vjp(matrix, torch.zeros_like(matrix), clip_ns_grad_ratio=True)
+    assert torch.count_nonzero(zero_gradient).item() == 0
+
+
+def test_ns5_ratio_clip_supports_checkpoint_recomputation():
+    torch.manual_seed(4)
+    cotangent = torch.randn(2, 4, 6).bfloat16()
+    for use_reentrant in (True, False):
+        matrix = (torch.randn(2, 4, 6) * 1e-3).requires_grad_(True)
+        update = checkpoint(
+            zeropower_via_newtonschulz5,
+            matrix,
+            use_reentrant=use_reentrant,
+        )
+        (update * cotangent).sum().backward()
+        input_norm = torch.linalg.vector_norm(cotangent.float(), dim=(-2, -1))
+        gradient_norm = torch.linalg.vector_norm(matrix.grad.float(), dim=(-2, -1))
+        assert torch.all(gradient_norm <= input_norm * (1 + 1e-6))
 
 
 def test_fused_fast_weight_update_matches_reference_formula():
@@ -151,5 +214,10 @@ def test_lact_config_builds_separate_vision_model():
     model.init_weights()
     assert config.model_type == "videochat3_lact_vision"
     assert isinstance(model, VideoChat3VisionLACTModel)
+    assert config.clip_ns_grad_ratio is True
+    assert all(block.memory.clip_ns_grad_ratio is True for block in model.encoder.blocks)
     assert all(block.memory_gate.shape == (16,) for block in model.encoder.blocks)
     assert all(torch.count_nonzero(block.memory_gate).item() == 0 for block in model.encoder.blocks)
+
+    unclipped = VideoChat3LACTVisionConfig(**_vision_kwargs(), clip_ns_grad_ratio=False).build()
+    assert all(block.memory.clip_ns_grad_ratio is False for block in unclipped.encoder.blocks)

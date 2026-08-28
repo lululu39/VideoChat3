@@ -131,6 +131,7 @@ def test_hf_interval_save_loads_independent_lact_model(tmp_path):
     saved_config = json.loads((save_path / "config.json").read_text())
     assert saved_config["model_type"] == "videochat3_lact"
     assert saved_config["vision_config"]["model_type"] == "videochat3_lact_vision"
+    assert saved_config["vision_config"]["clip_ns_grad_ratio"] is True
     assert saved_config["architectures"] == ["VideoChat3LACTForConditionalGeneration"]
     assert saved_config["auto_map"]["AutoModelForCausalLM"] == (
         "modeling_videochat3_lact.VideoChat3LACTForConditionalGeneration"
@@ -142,6 +143,7 @@ def test_hf_interval_save_loads_independent_lact_model(tmp_path):
     hf_config = AutoConfig.from_pretrained(save_path, trust_remote_code=True)
     assert type(hf_config).__name__ == "VideoChat3LACTConfig"
     assert type(hf_config.vision_config).__name__ == ("VideoChat3LACTVisionConfig")
+    assert hf_config.vision_config.clip_ns_grad_ratio is True
     hf_model, loading_info = AutoModelForCausalLM.from_pretrained(
         save_path,
         trust_remote_code=True,

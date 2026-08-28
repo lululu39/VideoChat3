@@ -24,12 +24,15 @@ from .modeling_videochat3 import (
 )
 
 
+_NS_GRAD_RATIO_RHO = 1.0
+_NS_GRAD_RATIO_EPS = 1e-12
+
+
 def inverse_softplus(value: float) -> float:
     return value + math.log(-math.expm1(-value))
 
 
-def zeropower_via_newtonschulz5(matrix: torch.Tensor, steps: int = 5) -> torch.Tensor:
-    """Batched quintic Newton-Schulz zeroth-power iteration used by VideoLACT."""
+def _zeropower_via_newtonschulz5_impl(matrix: torch.Tensor, steps: int) -> torch.Tensor:
     if steps == 0:
         return matrix
     if matrix.ndim != 3:
@@ -50,6 +53,54 @@ def zeropower_via_newtonschulz5(matrix: torch.Tensor, steps: int = 5) -> torch.T
     return x
 
 
+class _NS5WithBoundedBackward(torch.autograd.Function):
+    """Run exact NS5 forward and cap each matrix's realized backward gain."""
+
+    @staticmethod
+    def forward(ctx, matrix: torch.Tensor, steps: int) -> torch.Tensor:
+        ctx.steps = int(steps)
+        ctx.save_for_backward(matrix)
+        return _zeropower_via_newtonschulz5_impl(matrix, ctx.steps)
+
+    @staticmethod
+    def backward(ctx, grad_update: torch.Tensor):
+        (matrix,) = ctx.saved_tensors
+        if not ctx.needs_input_grad[0]:
+            return None, None
+
+        with torch.enable_grad():
+            recomputed_matrix = matrix.detach().requires_grad_(True)
+            recomputed_update = _zeropower_via_newtonschulz5_impl(recomputed_matrix, ctx.steps)
+            (exact_grad,) = torch.autograd.grad(
+                recomputed_update,
+                recomputed_matrix,
+                grad_update,
+                create_graph=False,
+            )
+
+        update_norm = torch.linalg.vector_norm(grad_update.float(), dim=(-2, -1), keepdim=True)
+        exact_norm = torch.linalg.vector_norm(exact_grad.float(), dim=(-2, -1), keepdim=True)
+        needs_clip = exact_norm > _NS_GRAD_RATIO_RHO * update_norm
+        scale = torch.where(
+            needs_clip,
+            _NS_GRAD_RATIO_RHO * update_norm / exact_norm.clamp_min(_NS_GRAD_RATIO_EPS),
+            torch.ones_like(exact_norm),
+        )
+        return exact_grad * scale.to(exact_grad.dtype), None
+
+
+def zeropower_via_newtonschulz5(
+    matrix: torch.Tensor,
+    steps: int = 5,
+    *,
+    clip_ns_grad_ratio: bool = True,
+) -> torch.Tensor:
+    """VideoLACT NS5 with an optional non-expansive local backward."""
+    if steps == 0 or not clip_ns_grad_ratio or not matrix.requires_grad:
+        return _zeropower_via_newtonschulz5_impl(matrix, steps)
+    return _NS5WithBoundedBackward.apply(matrix, steps)
+
+
 class FastWeightSwiGLU(nn.Module):
     """VideoLACT multi-head SwiGLU fast weights."""
 
@@ -60,6 +111,7 @@ class FastWeightSwiGLU(nn.Module):
         num_heads: int = 1,
         share_proj: bool = False,
         norm_epsilon: float = 1e-5,
+        clip_ns_grad_ratio: bool = True,
     ):
         super().__init__()
         if num_heads <= 0:
@@ -73,6 +125,7 @@ class FastWeightSwiGLU(nn.Module):
         self.head_dim = dim // num_heads
         self.hidden_dim = int(dim * inter_multi)
         self.share_proj = share_proj
+        self.clip_ns_grad_ratio = clip_ns_grad_ratio
 
         if share_proj:
             self.apply_proj = None
@@ -229,9 +282,11 @@ class FastWeightSwiGLU(nn.Module):
             )
         else:
             muon_gradients = torch.stack((w0_grad, w1_grad.transpose(-1, -2), w2_grad))
-        muon_updates = zeropower_via_newtonschulz5(muon_gradients.flatten(0, 2), muon_update_steps).reshape_as(
-            muon_gradients
-        )
+        muon_updates = zeropower_via_newtonschulz5(
+            muon_gradients.flatten(0, 2),
+            muon_update_steps,
+            clip_ns_grad_ratio=self.clip_ns_grad_ratio,
+        ).reshape_as(muon_gradients)
         w0_update, w1_update_oriented, w2_update = muon_updates.unbind(0)
         if transpose_w02:
             w0_update = w0_update.transpose(-1, -2)
@@ -267,6 +322,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         fw_share_proj: bool = False,
         fw_share_init: bool = True,
         fw_norm_epsilon: float = 1e-5,
+        clip_ns_grad_ratio: bool = True,
     ):
         super().__init__(
             num_heads=num_heads,
@@ -285,6 +341,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             num_heads=fw_num_heads,
             share_proj=fw_share_proj,
             norm_epsilon=fw_norm_epsilon,
+            clip_ns_grad_ratio=clip_ns_grad_ratio,
         )
         self.value_proj = None if fw_share_proj else nn.Linear(hidden_dim, hidden_dim, bias=False)
         self.memory_gate = nn.Parameter(torch.zeros(hidden_dim))
@@ -482,6 +539,7 @@ class VideoChat3LACTVisionModel(VideoChat3VisionPreTrainedModel):
                 "fw_share_proj": config.fw_share_proj,
                 "fw_share_init": config.fw_share_init,
                 "fw_norm_epsilon": config.fw_norm_epsilon,
+                "clip_ns_grad_ratio": config.clip_ns_grad_ratio,
             },
         )
         self.post_init()
