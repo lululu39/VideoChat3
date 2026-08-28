@@ -24,6 +24,8 @@ trainer.wandb_config = None
 trainer.resume_cfg = ResumeConfig(auto_resume=False)
 trainer.debug_skip_save = True
 trainer.global_batch_size = 16
+trainer.total_epoch = None
+trainer.total_step = 1
 trainer.dataloader_cfg.pack_max_length = 16384 * 6
 
 sample_max_length = 16384 * 6
