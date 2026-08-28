@@ -7,12 +7,13 @@ from xtuner.v1.datasets import VideoChat3TokenizeFnConfig
 from xtuner.v1.datasets.config import DataloaderConfig, DatasetConfig
 from xtuner.v1.loss import CELossConfig
 from xtuner.v1.model import VideoChat3LACTDense4BConfig
+from xtuner.v1.model.compose.videochat3 import VideoChat3LACTVisionConfig
 from xtuner.v1.train import ResumeConfig, TrainerConfig, WandbConfig
 
 
 run_name = os.getenv(
     "WANDB_NAME",
-    "vc3-4b-lact-fw4-ve-s3-full89k-8xh100-gb16-f128-s8k-vitlr2p5e6-v4",
+    "vc3-4b-lact-fw4-ve-s3-full89k-8xh100-gb16-f128-s8k-vitlr2p5e6-ns5r1-v1",
 )
 model_path = Path("/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init")
 metadata_path = Path(
@@ -21,7 +22,12 @@ metadata_path = Path(
 work_dir = Path("work_dir/stage3") / run_name
 cache_dir = Path("dataset_cache/cache_videochat3_4B_lact_stage3")
 
-model_cfg = VideoChat3LACTDense4BConfig()
+model_cfg = VideoChat3LACTDense4BConfig(
+    vision_config=VideoChat3LACTVisionConfig(
+        attn_impl="flash_attention_2",
+        clip_ns_grad_ratio=True,
+    )
+)
 
 sample_max_length = 8192
 pack_max_length = 8192
@@ -136,6 +142,7 @@ trainer = TrainerConfig(
             "lact",
             "fast-weight",
             "fw-window-4",
+            "ns5-ratio-clip-rho1",
             "vision-encoder-only",
             "stage3-full-local",
         ],
