@@ -10,7 +10,7 @@ from xtuner.v1.model import VideoChat3LACTDense4BConfig
 from xtuner.v1.train import ResumeConfig, TrainerConfig, WandbConfig
 
 
-run_name = os.getenv("WANDB_NAME", "vc3-4b-lact-fw4-ve-s3-lite-8xh100-v1")
+run_name = os.getenv("WANDB_NAME", "vc3-4b-lact-fw4-ve-s3-lite-8xh100-gb16-v1")
 model_path = Path("/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init")
 metadata_path = Path(
     "/mnt/localssd/dataset/VideoChat3/VideoChat3-Stage3-Training-Data/VideoChat3_Stage3_Training_Data_local.json"
@@ -22,17 +22,18 @@ model_cfg = VideoChat3LACTDense4BConfig()
 
 sample_max_length = 16384 * 6
 pack_max_length = 16384 * 6
-global_batch_size = 128
+reference_global_batch_size = 128
+global_batch_size = 16
 total_epoch = 1
 hf_interval = 5000
 hf_max_keep = 1
 checkpoint_interval = 100
 checkpoint_maxkeep = 1
 
-lr = 2e-5
+lr = 2e-5 * global_batch_size / reference_global_batch_size
 weight_decay = 0.0
 warmup_ratio = 0.03
-lr_min = 1e-6
+lr_min = 1e-6 * global_batch_size / reference_global_batch_size
 recompute_ratio = 1.0
 loss_reduction = "square"
 

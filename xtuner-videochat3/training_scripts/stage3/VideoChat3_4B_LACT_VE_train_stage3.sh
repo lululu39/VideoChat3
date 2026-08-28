@@ -10,7 +10,7 @@ WATCHDOG_STATE_DIR="/mnt/localssd/VideoChat3/gpu_exclusive_watchdog"
 export WANDB_ENTITY="LVSM-Experiment"
 export WANDB_PROJECT="videochat3"
 export WANDB_BASE_URL="https://api.wandb.ai"
-export WANDB_NAME="${WANDB_NAME:-vc3-4b-lact-fw4-ve-s3-lite-8xh100-v1}"
+export WANDB_NAME="${WANDB_NAME:-vc3-4b-lact-fw4-ve-s3-lite-8xh100-gb16-v1}"
 export WANDB_RUN_ID="${WANDB_RUN_ID:-${WANDB_NAME}}"
 export WANDB_MODE="${WANDB_MODE:-online}"
 export NNODES="${NNODES:-1}"
@@ -48,7 +48,7 @@ if [[ -f "${WATCHDOG_STATE_DIR}/watchdog.pid" ]]; then
 fi
 
 watchdog_log="${WATCHDOG_STATE_DIR}/training_${WANDB_RUN_ID}.jsonl"
-bash "${SCRIPT_DIR}/../run_sft.sh" \
+setsid bash "${SCRIPT_DIR}/../run_sft.sh" \
   "training_configs/stage3/VideoChat3_4B_LACT_VE_train_stage3.py" &
 training_pid=$!
 "${PROJECT_ROOT}/.venv/bin/python" "${WATCHDOG_SCRIPT}" \
@@ -59,7 +59,7 @@ training_pid=$!
 watchdog_pid=$!
 
 cleanup() {
-  kill -TERM "${training_pid}" 2>/dev/null || true
+  kill -TERM -- "-${training_pid}" 2>/dev/null || true
   kill -TERM "${watchdog_pid}" 2>/dev/null || true
 }
 trap cleanup INT TERM EXIT
