@@ -25,7 +25,9 @@
 
 - The filtered lightweight snapshot is `lmwang/VideoChat3-Stage3-Training-Data` revision `a7def4abd394697856be9cd6276efa98a27f23df` at `/mnt/localssd/dataset/VideoChat3/VideoChat3-Stage3-Training-Data`.
 - Download with `snapshot_download` while ignoring `data/image/**`, `videochat3_data_annotations/image/**`, and `videochat3_data_annotations/text/**`. Molmo2 is only an external top-level reference and has no files to exclude in this repo.
-- The verified retained snapshot is 57 files / 535.123 GiB: 28 Video tar shards, 4 Motion-Video tar shards, their annotations/manifests, and top metadata. Keep it packed until an extract-and-delete plan is selected because localssd has limited remaining capacity.
+- The retained download was 57 files / 535.123 GiB: 28 Video tar shards, 4 Motion-Video tar shards, annotations/manifests, and top metadata. The released loader cannot read tar members directly.
+- Run `uv run --frozen python scripts/extract_stage3_lightweight.py --delete-tars` to validate, extract, decode-smoke, record recovery state, and permanently delete one verified shard at a time. It writes `.extraction_state.json`, `media/`, and `VideoChat3_Stage3_Training_Data_local.json` under the dataset root and is safe to resume.
+- Current extraction is complete: 32/32 shards, 148,649 media items / 570,408,255,436 source bytes, and no tar files remain. All 30,966 references in the 17 local annotations exist; real `VLMJsonlDataset` decoding/tokenization passed for all eight media roots.
 
 ## VideoChat3 Model
 
