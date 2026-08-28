@@ -25,8 +25,10 @@ fi
 echo "W&B: https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}"
 echo "Run: ${WANDB_NAME} (id=${WANDB_RUN_ID})"
 
-"${PROJECT_ROOT}/.venv/bin/python" \
-  "${PROJECT_ROOT}/scripts/build_stage3_full_local_annotations.py"
+if [[ "${BUILD_STAGE3_FULL_LOCAL_ANNOTATIONS:-1}" == "1" ]]; then
+  "${PROJECT_ROOT}/.venv/bin/python" \
+    "${PROJECT_ROOT}/scripts/build_stage3_full_local_annotations.py"
+fi
 
 if [[ "${GPU_EXCLUSIVE:-1}" != "1" ]]; then
   exec bash "${SCRIPT_DIR}/../run_sft.sh" \

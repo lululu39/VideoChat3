@@ -17,10 +17,20 @@ run_name = os.getenv(
 )
 model_path = Path("/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init")
 metadata_path = Path(
-    "/mnt/localssd/dataset/VideoChat3/VideoChat3-Stage3-Training-Data/VideoChat3_Stage3_Training_Data_full_local.json"
+    os.getenv(
+        "VIDEOCHAT3_STAGE3_METADATA_PATH",
+        "/mnt/localssd/dataset/VideoChat3/VideoChat3-Stage3-Training-Data/"
+        "VideoChat3_Stage3_Training_Data_full_local.json",
+    )
 )
+dataset_tag = os.getenv("VIDEOCHAT3_STAGE3_DATASET_TAG", "stage3-full-local")
 work_dir = Path("work_dir/stage3") / run_name
-cache_dir = Path("dataset_cache/cache_videochat3_4B_lact_stage3")
+cache_dir = Path(
+    os.getenv(
+        "VIDEOCHAT3_STAGE3_CACHE_DIR",
+        "dataset_cache/cache_videochat3_4B_lact_stage3",
+    )
+)
 
 model_cfg = VideoChat3LACTDense4BConfig(
     vision_config=VideoChat3LACTVisionConfig(
@@ -146,7 +156,7 @@ trainer = TrainerConfig(
             "ns5-ratio-clip-rho1",
             "state-ratio-clip-rho1",
             "vision-encoder-only",
-            "stage3-full-local",
+            dataset_tag,
         ],
         resume="allow",
         mode=os.getenv("WANDB_MODE", "online"),
