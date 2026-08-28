@@ -9,13 +9,19 @@ fi
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+ENV_ROOT="$(cd -- "${PROJECT_ROOT}/.." && pwd)"
 CONFIG_PATH="$1"
+TORCHRUN_BIN="${TORCHRUN_BIN:-${ENV_ROOT}/.venv/bin/torchrun}"
 
 if [[ "${CONFIG_PATH}" != /* ]]; then
   CONFIG_PATH="${PROJECT_ROOT}/${CONFIG_PATH}"
 fi
 if [[ ! -f "${CONFIG_PATH}" ]]; then
   echo "Config not found: ${CONFIG_PATH}" >&2
+  exit 2
+fi
+if [[ ! -x "${TORCHRUN_BIN}" ]]; then
+  echo "Locked torchrun not found: ${TORCHRUN_BIN}; run 'uv sync --frozen' in ${ENV_ROOT}." >&2
   exit 2
 fi
 
@@ -70,8 +76,9 @@ echo "Config: ${CONFIG_PATH}"
 echo "Nodes: ${NNODES}; processes per node: ${NPROC_PER_NODE}"
 echo "Rendezvous: ${MASTER_ADDR}:${MASTER_PORT}; id: ${RDZV_ID}"
 echo "Log: ${log_file}"
+echo "Torchrun: ${TORCHRUN_BIN}"
 
-torchrun \
+"${TORCHRUN_BIN}" \
   --nnodes="${NNODES}" \
   --nproc-per-node="${NPROC_PER_NODE}" \
   --rdzv-backend=c10d \
