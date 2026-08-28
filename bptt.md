@@ -69,13 +69,75 @@ $$
 
 ## 3. NS5 为什么会放大 backward
 
-每次 FW update 都包含下面的 VJP：
+先看一次 fast-weight update 中 NS5 这个局部算子。设传给 NS5 的原始更新矩阵为
+$G_t$，NS5 输出的归一化更新矩阵为 $U_t$：
 
 $$
-dG_t = J_{\operatorname{NS5}}(G_t)^\top dU_t.
+U_t = \operatorname{NS5}(G_t),
+\qquad
+G_t,U_t\in\mathbb{R}^{m\times n}.
 $$
 
-NS5 首先归一化输入：
+为了把矩阵到矩阵的导数写清楚，先将两个矩阵展平成向量：
+
+$$
+g_t=\operatorname{vec}(G_t),
+\qquad
+u_t=\operatorname{vec}(U_t).
+$$
+
+NS5 在 $G_t$ 处的 Jacobian 定义为：
+
+$$
+J_{\operatorname{NS5}}(G_t)
+=
+\frac{\partial u_t}{\partial g_t}
+\in\mathbb{R}^{mn\times mn}.
+$$
+
+也就是说，它的第 $(i,j)$ 个元素为：
+
+$$
+\left[J_{\operatorname{NS5}}(G_t)\right]_{ij}
+=
+\frac{\partial (u_t)_i}{\partial (g_t)_j}.
+$$
+
+设最终训练 loss 为 $\mathcal L$。从 NS5 后面的计算传回来的上游梯度，以及继续传给
+NS5 前面计算的梯度，分别记为：
+
+$$
+\bar u_t=\frac{\partial\mathcal L}{\partial u_t},
+\qquad
+\bar g_t=\frac{\partial\mathcal L}{\partial g_t}.
+$$
+
+根据 reverse-mode 链式法则：
+
+$$
+\frac{\partial\mathcal L}{\partial(g_t)_j}
+=
+\sum_i
+\frac{\partial(u_t)_i}{\partial(g_t)_j}
+\frac{\partial\mathcal L}{\partial(u_t)_i},
+$$
+
+写成列向量形式就是：
+
+$$
+\boxed{
+\bar g_t
+=
+J_{\operatorname{NS5}}(G_t)^\top\bar u_t
+}.
+$$
+
+这就是 reverse-mode 的 vector-Jacobian product（VJP）的列向量写法。转置来自上面
+分量形式中的指标顺序，而不是额外引入的算子。将 $\bar u_t$ 和 $\bar g_t$ reshape 回矩阵后，分别写成
+$\bar U_t$ 和 $\bar G_t$。实现中的 `grad_update` 对应 $\bar U_t$，原始精确
+backward 得到的 `exact_grad` 对应 $\bar G_t$。
+
+这个 VJP 可能放大的原因来自 NS5 的第一步。NS5 首先归一化输入：
 
 $$
 X_0 = \frac{G_t}{\lVert G_t\rVert_F + \epsilon}.
@@ -92,12 +154,16 @@ VJP 方向上的 amplification ratio：
 
 $$
 r_t =
+\frac{\lVert\bar G_t\rVert_F}{\lVert\bar U_t\rVert_F}
+=
 \frac{
-\left\lVert J_{\operatorname{NS5}}(G_t)^\top dU_t \right\rVert_F
-}{
-\lVert dU_t\rVert_F
-}.
+\left\lVert J_{\operatorname{NS5}}(G_t)^\top\bar u_t\right\rVert_2
+}{\lVert\bar u_t\rVert_2}.
 $$
+
+这里矩阵的 Frobenius norm 等于其向量化结果的 Euclidean norm，所以两个比值完全
+相同。这个 $r_t$ 不是整个 Jacobian 的最大奇异值，而是当前训练梯度方向上真正发生的
+局部放大倍数。
 
 稳定化之前，长 BPTT 路径可能包含 $\prod_{t=1}^{T}r_t$。受控实验中，8 次
 update 只有轻微增长，16 次开始快速增长，32 次发生严重爆炸。
@@ -119,17 +185,19 @@ $$
 Backward 首先重新计算精确 VJP：
 
 $$
-dG_{\mathrm{exact}}
+\bar G_{\mathrm{exact}}
 =
-J_{\operatorname{NS5}}(G_t)^\top dU_t.
+\operatorname{reshape}\!\left(
+J_{\operatorname{NS5}}(G_t)^\top\bar u_t
+\right).
 $$
 
 对每个独立 NS5 矩阵计算：
 
 $$
 r =
-\frac{\lVert dG_{\mathrm{exact}}\rVert_F}
-     {\lVert dU_t\rVert_F}.
+\frac{\lVert\bar G_{\mathrm{exact}}\rVert_F}
+     {\lVert\bar U_t\rVert_F}.
 $$
 
 固定最大 amplification：
@@ -141,28 +209,28 @@ $$
 最终返回的梯度为：
 
 $$
-dG =
+\bar G =
 \begin{cases}
-dG_{\mathrm{exact}}, & r \le \rho, \\[6pt]
-dG_{\mathrm{exact}}\dfrac{\rho}{r}, & r > \rho.
+\bar G_{\mathrm{exact}}, & r \le \rho, \\[6pt]
+\bar G_{\mathrm{exact}}\dfrac{\rho}{r}, & r > \rho.
 \end{cases}
 $$
 
 等价形式为：
 
 $$
-dG = dG_{\mathrm{exact}}
+\bar G = \bar G_{\mathrm{exact}}
 \min\left(
 1,
-\frac{\rho\lVert dU_t\rVert_F}
-     {\lVert dG_{\mathrm{exact}}\rVert_F}
+\frac{\rho\lVert\bar U_t\rVert_F}
+     {\lVert\bar G_{\mathrm{exact}}\rVert_F}
 \right).
 $$
 
 因此在浮点误差范围内严格满足：
 
 $$
-\boxed{\lVert dG\rVert_F \le \lVert dU_t\rVert_F}.
+\boxed{\lVert\bar G\rVert_F \le \lVert\bar U_t\rVert_F}.
 $$
 
 实现按 batched NS5 中的每个矩阵独立约束，包括每个 video、FW head 以及
@@ -200,7 +268,7 @@ $$
 - Inference 行为。
 - $r\le1$ 时的精确 backward。
 
-当 $r>1$ 时，只缩放 $dG_{\mathrm{exact}}$ 的 magnitude，方向保持不变。
+当 $r>1$ 时，只缩放 $\bar G_{\mathrm{exact}}$ 的 magnitude，方向保持不变。
 `lr_proj` 和 value/update projections 仍然收到非零梯度。
 
 代价是：触发 clipping 后，返回的是有偏 surrogate gradient，而不是原始 NS5
@@ -208,7 +276,7 @@ forward 的精确导数。此外，该保证只作用于 NS5 局部 VJP，并不
 满足：
 
 $$
-\lVert dS_{t-1}\rVert_F \le \lVert dS_t\rVert_F.
+\lVert\bar S_{t-1}\rVert_F \le \lVert\bar S_t\rVert_F.
 $$
 
 因为 inner-gradient 构造和 state normalization 仍位于被约束的 NS5 VJP 之外。
