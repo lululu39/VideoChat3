@@ -64,8 +64,50 @@ J_1^\top J_2^\top \cdots J_T^\top a_T,
 J_t = \frac{\partial S_t}{\partial S_{t-1}}.
 $$
 
-纯文本：梯度在分支处相加，在连续 state-transition 边上相乘。因此每步略大于
-1 的放大系数也可能随 FW update 数量指数增长。
+先看一条没有其他分支的纯链。若：
+
+$$
+b_{t-1}=J_t^\top b_t,
+\qquad
+q_t=\frac{\lVert b_{t-1}\rVert}{\lVert b_t\rVert},
+$$
+
+那么相邻范数会消去，得到严格等式：
+
+$$
+\frac{\lVert b_0\rVert}{\lVert b_T\rVert}
+=
+\prod_{t=1}^{T}q_t.
+$$
+
+例如每一步在其实际输入梯度方向上都放大 $1.2$ 倍，经过 32 步就是
+$1.2^{32}\approx341$ 倍。这就是 BPTT 中“每步小幅放大，长链后爆炸”的来源。
+
+LACT 的完整 transition 不是只有 NS5。记 InnerGrad、NS5 和 Normalize 的 Jacobian
+分别为 $H_t$、$P_t$ 和 $N_t$，则：
+
+$$
+J_t
+=
+N_t\left(I+P_tH_t\right),
+$$
+
+对应的 future backward 为：
+
+$$
+J_t^\top b_t
+=
+\left(I+H_t^\top P_t^\top\right)N_t^\top b_t.
+$$
+
+这里的 $I$ 是 residual state 分支，$H_t^\top P_t^\top$ 是经过 FW update 的分支。
+把连续多个括号展开后会得到许多路径；连续选择 FW update 分支的路径会包含多个
+$P_t^\top$，也就是多个 NS5 backward。局部 NS5 amplification ratio $r_t$ 的乘积
+描述的是这些路径中的 NS5 因素，而不是完整 $J_t$ 的全部增益。
+
+纯文本：完整 transition 的 $q_t$ 沿一条纯 future chain 连乘是严格等式；NS5 的
+$r_t$ 只是在展开后某条路径中的局部因素。实际 BPTT 还会加上各 group 的直接 loss
+梯度，因此最终梯度不是单独一个乘积。
 
 ## 3. NS5 为什么会放大 backward
 
@@ -137,6 +179,21 @@ $$
 $\bar U_t$ 和 $\bar G_t$。实现中的 `grad_update` 对应 $\bar U_t$，原始精确
 backward 得到的 `exact_grad` 对应 $\bar G_t$。
 
+直观地说，VJP 回答的是：“已经知道 loss 希望 NS5 输出 $U_t$ 怎样变化，那么 loss
+希望 NS5 输入 $G_t$ 怎样变化？”自动微分不需要构造巨大的 $mn\times mn$ Jacobian，
+只计算当前上游梯度所需的乘积。在 PyTorch 记法中，概念上相当于：
+
+```python
+grad_G = torch.autograd.grad(
+    outputs=U,
+    inputs=G,
+    grad_outputs=grad_U,
+)
+```
+
+数学文献常把行向量形式 $\bar u_t^\top J$ 直接称为 VJP；本文使用等价的列向量形式
+$J^\top\bar u_t$。
+
 这个 VJP 可能放大的原因来自 NS5 的第一步。NS5 首先归一化输入：
 
 $$
@@ -165,8 +222,8 @@ $$
 相同。这个 $r_t$ 不是整个 Jacobian 的最大奇异值，而是当前训练梯度方向上真正发生的
 局部放大倍数。
 
-稳定化之前，长 BPTT 路径可能包含 $\prod_{t=1}^{T}r_t$。受控实验中，8 次
-update 只有轻微增长，16 次开始快速增长，32 次发生严重爆炸。
+稳定化之前，展开后的长 BPTT 路径可能包含多个大于 1 的 $r_t$ 因素。受控实验中，
+8 次 update 只有轻微增长，16 次开始快速增长，32 次发生严重爆炸。
 
 ## 4. Bounded NS5 backward
 
@@ -238,7 +295,7 @@ $$
 
 ## 5. 它如何消除已观察到的指数放大
 
-修改前，长 BPTT 路径中的 NS5 部分可能满足：
+修改前，展开后某条长 BPTT 路径中的 NS5 因素可能满足：
 
 $$
 r_1r_2\cdots r_T \gg 1.
@@ -252,9 +309,10 @@ r_t^{\mathrm{clipped}} \le 1
 \prod_{t=1}^{T}r_t^{\mathrm{clipped}} \le 1.
 $$
 
-因此 NS5 不再向时间方向的 Jacobian product 提供指数放大。每个 group 的直接梯度
+因此 NS5 局部 VJP 本身不再沿时间路径提供大于 1 的连乘因素。每个 group 的直接梯度
 仍会进入 recurrence，跨 group 的长期梯度也仍然非零。这不同于 detach 或 TBPTT；
-后两者会把跨边界梯度直接设为零。
+后两者会把跨边界梯度直接设为零。这个结论不代表完整 transition 一定 non-expansive：
+$H_t$、$N_t$、residual 分支及不同分支相加仍可能改变完整梯度范数。
 
 ## 6. 保持不变与发生改变的语义
 
