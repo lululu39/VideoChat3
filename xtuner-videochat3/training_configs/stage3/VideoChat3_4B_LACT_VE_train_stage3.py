@@ -10,7 +10,7 @@ from xtuner.v1.model import VideoChat3LACTDense4BConfig
 from xtuner.v1.train import ResumeConfig, TrainerConfig, WandbConfig
 
 
-run_name = os.getenv("WANDB_NAME", "vc3-4b-lact-fw4-ve-s3-lite-v1")
+run_name = os.getenv("WANDB_NAME", "vc3-4b-lact-fw4-ve-s3-lite-8xh100-v1")
 model_path = Path("/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init")
 metadata_path = Path(
     "/mnt/localssd/dataset/VideoChat3/VideoChat3-Stage3-Training-Data/VideoChat3_Stage3_Training_Data_local.json"
