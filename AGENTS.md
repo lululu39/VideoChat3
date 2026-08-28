@@ -47,7 +47,7 @@
 - `VideoChat3LACTDense4BConfig` loads the original 4B checkpoint with missing LACT weights initialized as above, freezes the LM/projector, and trains the entire vision encoder. Planned data is Stage 3 LV + OL, optionally a small still-undecided Academic2M mix.
 - LACT builds and HF saves use an independent `videochat3_lact` model with a `videochat3_lact_vision` encoder. They inherit all non-vision behavior, preserve original key names/processor assets, export custom `auto_map` code, and support strict XTuner resume plus VLMEvalKit/Transformers loading; `hf_interval` can remain enabled.
 - The retained initialization checkpoint is `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init` (9.1 GiB). `initialization_validation.json` confirms all 734 original tensors are bitwise equal, all 270 added tensors are FW-only, and 27/27 layers satisfy Q/K/V/O share-init plus zero gate.
-- `scripts/benchmark_videochat3_lact.py` records isolated BF16/FlashAttention H100 timings in `benchmark_h100.json`. At a 16x16 patch grid, LACT is 2.34x vision / 1.45x full-VLM latency for one 4-frame window, and 5.52x / 2.80x for two windows with one update; zero gate does not bypass FW apply/update compute.
+- `scripts/benchmark_videochat3_lact.py` records isolated BF16/FlashAttention H100 timings. For an 8-frame, 16x16 patch-grid video, LACT vision is about 5.5x slower, but full-VLM latency falls from 2.78x at 641 tokens to 2.00x/1.30x/1.04x at 2,177/8,321/32,897 tokens; see `benchmark_h100_long_context.json`. Zero gate does not bypass FW apply/update compute.
 
 ## VideoMamba ViT/LACT Comparison
 
