@@ -12,7 +12,7 @@ from xtuner.v1.train import ResumeConfig, TrainerConfig, WandbConfig
 
 run_name = os.getenv(
     "WANDB_NAME",
-    "vc3-4b-lact-fw4-ve-s3-lite-8xh100-gb16-f128-s16k-v1",
+    "vc3-4b-lact-fw4-ve-s3-lite-8xh100-gb16-f128-s16k-vitlr2p5e6-v2",
 )
 model_path = Path("/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init")
 metadata_path = Path(
@@ -29,6 +29,7 @@ frame_max_pixels = 224 * 224
 video_max_total_pixels = 128 * frame_max_pixels
 video_max_frames = 128
 reference_global_batch_size = 128
+reference_vit_lr = 8e-5 / 4
 global_batch_size = 16
 total_epoch = 1
 hf_interval = 5000
@@ -36,7 +37,8 @@ hf_max_keep = 1
 checkpoint_interval = 100
 checkpoint_maxkeep = 1
 
-lr = 2e-5 * global_batch_size / reference_global_batch_size
+vit_lr = reference_vit_lr * global_batch_size / reference_global_batch_size
+lr = vit_lr
 weight_decay = 0.0
 warmup_ratio = 0.03
 lr_min = 1e-6 * global_batch_size / reference_global_batch_size
@@ -98,7 +100,7 @@ dataloader_config = DataloaderConfig(
 )
 
 optim_cfg = VisionAdamWConfig(
-    vit_lr=lr / 4,
+    vit_lr=vit_lr,
     projector_lr=lr,
     lr=lr,
     weight_decay=weight_decay,
