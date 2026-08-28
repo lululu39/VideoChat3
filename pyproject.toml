@@ -14,6 +14,9 @@ dependencies = [
     "xtuner",
 ]
 
+[dependency-groups]
+dev = ["pytest>=8,<9"]
+
 [tool.uv]
 package = false
 required-version = "==0.12.1"

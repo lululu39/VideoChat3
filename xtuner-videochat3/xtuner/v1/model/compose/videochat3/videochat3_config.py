@@ -1,5 +1,5 @@
 from pathlib import Path
-from typing import Literal, Optional, Any
+from typing import Any, Literal, Optional
 
 from mmengine import is_installed
 from pydantic import BaseModel, ConfigDict
@@ -7,7 +7,7 @@ from typing_extensions import Self
 
 from xtuner.v1.float8 import Float8Config
 from xtuner.v1.model.base import TransformerConfig
-from xtuner.v1.model.dense.qwen3 import Qwen3Dense8BConfig, Qwen3Dense4BConfig, Qwen3Dense1_7BConfig
+from xtuner.v1.model.dense.qwen3 import Qwen3Dense1_7BConfig, Qwen3Dense4BConfig, Qwen3Dense8BConfig
 from xtuner.v1.utils import get_logger
 
 
@@ -47,6 +47,50 @@ class VideoChat3VisionConfig(BaseModel):
         from .modeling_vision import VideoChat3VisionModel
 
         return VideoChat3VisionModel(self)
+
+
+class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
+    model_type: str = "moonvit_lact"
+    fw_inter_multi: float = 2.0
+    fw_num_heads: int = 1
+    fw_base_lr: float = 0.01
+    fw_muon_update_steps: int = 5
+    fw_share_proj: bool = False
+    fw_share_init: bool = True
+    fw_norm_epsilon: float = 1e-5
+
+    def model_post_init(self, __context: Any) -> None:
+        super().model_post_init(__context)
+        if self.temporal_merge_size != 4:
+            raise ValueError(
+                "VideoChat3 LACT currently requires temporal_merge_size=4, got "
+                f"{self.temporal_merge_size}"
+            )
+        if self.fw_inter_multi <= 0:
+            raise ValueError("fw_inter_multi must be positive")
+        if self.fw_num_heads <= 0:
+            raise ValueError("fw_num_heads must be positive")
+        if self.hidden_size % self.fw_num_heads != 0:
+            raise ValueError(
+                f"hidden_size={self.hidden_size} must be divisible by "
+                f"fw_num_heads={self.fw_num_heads}"
+            )
+        if self.fw_share_proj and self.fw_share_init:
+            raise ValueError(
+                "fw_share_init only applies to private projections; set it to "
+                "False when fw_share_proj=True"
+            )
+        if self.fw_base_lr <= 0:
+            raise ValueError("fw_base_lr must be positive")
+        if self.fw_muon_update_steps < 0:
+            raise ValueError("fw_muon_update_steps must be non-negative")
+        if self.fw_norm_epsilon <= 0:
+            raise ValueError("fw_norm_epsilon must be positive")
+
+    def build(self):
+        from .modeling_vision_lact import VideoChat3VisionLACTModel
+
+        return VideoChat3VisionLACTModel(self)
 
 
 class VideoChat3ProjectorConfig(BaseModel):
@@ -128,6 +172,27 @@ class VideoChat3Dense4BConfig(VideoChat3BaseConfig):
             "Only the original HuggingFace config will be retained in the saved HuggingFace format checkpoint. "
             f"If you have changed the default values in {type(self)}, it may cause the config in the saved "
             "HuggingFace format checkpoint to not match the weights."
+        )
+        return None
+
+
+class VideoChat3LACTDense4BConfig(VideoChat3BaseConfig):
+    vision_config: VideoChat3LACTVisionConfig = VideoChat3LACTVisionConfig(
+        attn_impl="flash_attention_2"
+    )
+    projector_config: VideoChat3ProjectorConfig = VideoChat3ProjectorConfig(
+        text_hidden_size=2560
+    )
+    text_config: Qwen3Dense4BConfig = Qwen3Dense4BConfig(vocab_size=151936)
+    freeze_vision: bool = False
+    freeze_projector: bool = True
+    freeze_language: bool = True
+
+    @property
+    def hf_config(self):
+        logger.warning(
+            f"{type(self)} retains the original Hugging Face config when saving; "
+            "resume VideoChat3 LACT checkpoints with this XTuner config."
         )
         return None
 

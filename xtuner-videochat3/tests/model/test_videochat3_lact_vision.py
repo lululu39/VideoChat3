@@ -1,0 +1,151 @@
+import torch
+import torch.nn.functional as F
+
+from xtuner.v1.model.compose.videochat3.modeling_vision_lact import (
+    FastWeightSwiGLU,
+    VideoChat3VisionLACTModel,
+    zeropower_via_newtonschulz5,
+)
+from xtuner.v1.model.compose.videochat3.videochat3_config import (
+    VideoChat3LACTVisionConfig,
+    VideoChat3VisionConfig,
+)
+
+
+def _vision_kwargs():
+    return {
+        "hidden_size": 16,
+        "intermediate_size": 32,
+        "num_attention_heads": 4,
+        "num_hidden_layers": 2,
+        "patch_size": 2,
+        "merge_kernel_size": [2, 2],
+        "temporal_merge_size": 4,
+        "init_pos_emb_height": 2,
+        "init_pos_emb_width": 2,
+        "attn_impl": "eager_attention",
+    }
+
+
+def _flatten_outputs(outputs):
+    return torch.cat([output.flatten() for output in outputs])
+
+
+def _copy_baseline_weights(baseline, lact):
+    missing, unexpected = lact.load_state_dict(baseline.state_dict(), strict=False)
+    assert not unexpected
+    assert missing
+    for block in lact.encoder.blocks:
+        block.reset_lact_parameters()
+
+
+def _reference_update(memory, key, target, learning_rates, fast_weights, master_weights, steps):
+    w0, w1, w2 = fast_weights
+    master_w0, master_w1, master_w2 = master_weights
+    batch_size, seq_len, _ = key.shape
+    output, key_heads, gate, up, hidden = memory._apply_fast_weights(key, fast_weights)
+    error = (target.float() - output.float()) / seq_len
+    error_heads = error.reshape(batch_size, seq_len, memory.num_heads, memory.head_dim)
+    d_hidden = torch.einsum("blhd,bhdk->blhk", error_heads, w1.float().transpose(-1, -2))
+    d_up = d_hidden * F.silu(gate)
+    d_gate = d_hidden * up
+    sigmoid = torch.sigmoid(gate)
+    d_gate_pre = d_gate * sigmoid * (1 + gate * (1 - sigmoid))
+    lr0, lr1, lr2 = learning_rates.float().split(1, dim=-1)
+
+    w0_grad = torch.einsum("blhd,blhk->bhdk", key_heads.float() * lr0.unsqueeze(2), d_gate_pre.float())
+    w1_grad = torch.einsum("blhk,blhd->bhkd", hidden.float() * lr1.unsqueeze(2), error_heads.float())
+    w2_grad = torch.einsum("blhd,blhk->bhdk", key_heads.float() * lr2.unsqueeze(2), d_up.float())
+
+    def muon(gradient):
+        shape = gradient.shape
+        return zeropower_via_newtonschulz5(gradient.flatten(0, 1), steps).reshape(shape)
+
+    master_weights = (
+        master_w0 + muon(w0_grad).to(master_w0.dtype),
+        master_w1 + muon(w1_grad).to(master_w1.dtype),
+        master_w2 + muon(w2_grad).to(master_w2.dtype),
+    )
+    fast_weights = tuple(F.normalize(weight, dim=2, eps=1e-5).to(w0.dtype) for weight in master_weights)
+    return fast_weights, master_weights
+
+
+def test_fused_fast_weight_update_matches_reference_formula():
+    torch.manual_seed(3)
+    memory = FastWeightSwiGLU(dim=8, inter_multi=2, num_heads=1, share_proj=True)
+    key = torch.randn(2, 7, 8)
+    target = torch.randn(2, 7, 8)
+    learning_rates = torch.rand(2, 7, 3) * 0.02
+    fast_weights, master_weights = memory.init_fast_weights(batch_size=2)
+
+    actual = memory.update_preprojected(
+        key,
+        target,
+        learning_rates,
+        fast_weights,
+        master_weights,
+        muon_update_steps=2,
+    )
+    expected = _reference_update(
+        memory,
+        key,
+        target,
+        learning_rates,
+        fast_weights,
+        master_weights,
+        steps=2,
+    )
+    for actual_group, expected_group in zip(actual, expected):
+        for actual_weight, expected_weight in zip(actual_group, expected_group):
+            torch.testing.assert_close(actual_weight, expected_weight, rtol=0, atol=0)
+
+
+def test_zero_memory_gate_preserves_baseline_and_receives_gradient():
+    torch.manual_seed(7)
+    baseline = VideoChat3VisionConfig(**_vision_kwargs()).build()
+    torch.manual_seed(11)
+    lact = VideoChat3LACTVisionConfig(**_vision_kwargs(), fw_muon_update_steps=0).build()
+    _copy_baseline_weights(baseline, lact)
+
+    pixel_values = torch.randn(32, 12)
+    grid_thws = torch.tensor([[8, 2, 2]], dtype=torch.int32)
+    baseline_output = _flatten_outputs(baseline(pixel_values, grid_thws))
+    lact_output = _flatten_outputs(lact(pixel_values, grid_thws))
+    torch.testing.assert_close(lact_output, baseline_output, rtol=0, atol=0)
+
+    lact_output.sum().backward()
+    for block in lact.encoder.blocks:
+        assert block.memory_gate.grad is not None
+        assert torch.count_nonzero(block.memory_gate.grad).item() > 0
+
+
+def test_fast_state_updates_later_clip_and_resets_at_video_boundary():
+    torch.manual_seed(13)
+    lact = VideoChat3LACTVisionConfig(**_vision_kwargs(), fw_muon_update_steps=0).build()
+    with torch.no_grad():
+        for block in lact.encoder.blocks:
+            block.memory_gate.fill_(0.1)
+
+    first_video = torch.randn(32, 12)
+    second_video = torch.randn(32, 12)
+    one_video_grid = torch.tensor([[8, 2, 2]], dtype=torch.int32)
+    split_grid = torch.tensor([[4, 2, 2], [4, 2, 2]], dtype=torch.int32)
+
+    joined_clips = lact(first_video, one_video_grid)
+    reset_clips = lact(first_video, split_grid)
+    assert not torch.allclose(joined_clips[1], reset_clips[1])
+
+    batched = lact(
+        torch.cat((first_video, second_video)),
+        torch.tensor([[8, 2, 2], [8, 2, 2]], dtype=torch.int32),
+    )
+    separate = lact(first_video, one_video_grid) + lact(second_video, one_video_grid)
+    assert len(batched) == len(separate)
+    for batched_clip, separate_clip in zip(batched, separate):
+        torch.testing.assert_close(batched_clip, separate_clip, rtol=1e-5, atol=1e-6)
+
+
+def test_lact_config_builds_separate_vision_model():
+    model = VideoChat3LACTVisionConfig(**_vision_kwargs()).build()
+    assert isinstance(model, VideoChat3VisionLACTModel)
+    assert all(block.memory_gate.shape == (16,) for block in model.encoder.blocks)

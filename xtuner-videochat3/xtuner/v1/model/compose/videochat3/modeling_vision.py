@@ -405,7 +405,10 @@ def eager_attention(
     v = v.transpose(0, 1)
 
     attn_weight = q @ k.transpose(-2, -1) / math.sqrt(q.shape[-1])
-    attn_weight += attention_mask
+    attn_weight = attn_weight.masked_fill(
+        ~attention_mask,
+        torch.finfo(attn_weight.dtype).min,
+    )
     attn_weight = torch.softmax(attn_weight, dim=-1, dtype=torch.float32).to(q.dtype)
 
     attn_output = attn_weight @ v

@@ -17,12 +17,12 @@ from .compose.qwen3_vl import (
     Qwen3VLMoE30BA3Config,
     Qwen3VLMoE235BA22Config,
 )
-
 from .compose.videochat3 import (
     VideoChat3Dense2BConfig,
     VideoChat3Dense4BConfig,
     VideoChat3Dense4BT1Config,
-    VideoChat3Dense8BConfig
+    VideoChat3Dense8BConfig,
+    VideoChat3LACTDense4BConfig,
 )
 from .compose.videochat3_oryx import (
     VideoChat3OryxDense4BConfig,
@@ -107,5 +107,6 @@ __all__ = [
     "VideoChat3Dense4BConfig",
     "VideoChat3Dense4BT1Config",
     "VideoChat3Dense8BConfig",
+    "VideoChat3LACTDense4BConfig",
     "VideoChat3OryxDense4BConfig",
 ]

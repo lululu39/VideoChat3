@@ -1,0 +1,565 @@
+import math
+from pathlib import Path
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from typing_extensions import override
+
+from transformers.activations import ACT2FN
+from xtuner.v1.model import BaseModel
+
+from .modeling_vision import (
+    VideoChat3VisionLayer,
+    VideoChat3VisionModel,
+    VideoChat3VisionPatchEmbed,
+    patch_merger,
+)
+from .videochat3_config import VideoChat3LACTVisionConfig
+
+
+def inverse_softplus(value: float) -> float:
+    return value + math.log(-math.expm1(-value))
+
+
+def zeropower_via_newtonschulz5(matrix: torch.Tensor, steps: int = 5) -> torch.Tensor:
+    """Batched quintic Newton-Schulz zeroth-power iteration used by VideoLACT."""
+    if steps == 0:
+        return matrix
+    if matrix.ndim != 3:
+        raise ValueError(f"Expected a 3D matrix batch, got shape {matrix.shape}")
+
+    a, b, c = 3.4445, -4.7750, 2.0315
+    x = matrix.bfloat16()
+    transpose = matrix.shape[-2] > matrix.shape[-1]
+    if transpose:
+        x = x.transpose(-2, -1)
+    x = x / (x.norm(dim=(-2, -1), keepdim=True) + 1e-7)
+    for _ in range(steps):
+        gram = x @ x.transpose(-2, -1)
+        polynomial = b * gram + (c * gram) @ gram
+        x = a * x + polynomial @ x
+    if transpose:
+        x = x.transpose(-2, -1)
+    return x
+
+
+class FastWeightSwiGLU(nn.Module):
+    """VideoLACT multi-head SwiGLU fast weights with optional private projections."""
+
+    def __init__(
+        self,
+        dim: int,
+        inter_multi: float = 2,
+        num_heads: int = 1,
+        share_proj: bool = False,
+        norm_epsilon: float = 1e-5,
+    ):
+        super().__init__()
+        if num_heads <= 0:
+            raise ValueError(f"num_heads must be positive, got {num_heads}")
+        if dim % num_heads != 0:
+            raise ValueError(f"dim={dim} must be divisible by num_heads={num_heads}")
+        if inter_multi <= 0:
+            raise ValueError(f"inter_multi must be positive, got {inter_multi}")
+        self.dim = dim
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.hidden_dim = int(dim * inter_multi)
+        self.share_proj = share_proj
+
+        if share_proj:
+            self.apply_proj = None
+            self.update_proj = None
+            self.output_proj = None
+        else:
+            self.apply_proj = nn.Sequential(nn.Linear(dim, dim, bias=False), nn.SiLU())
+            self.update_proj = nn.Sequential(nn.Linear(dim, dim, bias=False), nn.SiLU())
+            self.output_proj = nn.Linear(dim, dim, bias=False)
+        self.apply_norm = nn.RMSNorm(dim, eps=norm_epsilon, elementwise_affine=False)
+        self.output_norm = nn.RMSNorm(dim, eps=norm_epsilon, elementwise_affine=False)
+
+        self.w0 = nn.Parameter(torch.empty(num_heads, self.head_dim, self.hidden_dim))
+        self.w1 = nn.Parameter(torch.empty(num_heads, self.hidden_dim, self.head_dim))
+        self.w2 = nn.Parameter(torch.empty(num_heads, self.head_dim, self.hidden_dim))
+        self.reset_parameters()
+
+    @torch.no_grad()
+    def reset_parameters(self) -> None:
+        nn.init.normal_(self.w0, std=1 / math.sqrt(self.head_dim))
+        nn.init.normal_(self.w1, std=1 / math.sqrt(self.hidden_dim))
+        nn.init.normal_(self.w2, std=1 / math.sqrt(self.head_dim))
+        if self.apply_proj is not None:
+            nn.init.trunc_normal_(self.apply_proj[0].weight, std=0.02)
+            nn.init.trunc_normal_(self.update_proj[0].weight, std=0.02)
+            nn.init.zeros_(self.output_proj.weight)
+
+    def init_fast_weights(self, batch_size: int):
+        master_weights = tuple(
+            weight.float().unsqueeze(0).repeat(batch_size, 1, 1, 1) for weight in (self.w0, self.w1, self.w2)
+        )
+        fast_dtype = torch.bfloat16 if master_weights[0].is_cuda else master_weights[0].dtype
+        fast_weights = tuple(F.normalize(weight, dim=2, eps=1e-5).to(fast_dtype) for weight in master_weights)
+        return fast_weights, master_weights
+
+    def _apply_fast_weights(self, x: torch.Tensor, fast_weights):
+        w0, w1, w2 = fast_weights
+        output_dtype = x.dtype
+        x = x.to(w0.dtype)
+        batch_size, seq_len, _ = x.shape
+        x_heads = x.reshape(batch_size, seq_len, self.num_heads, self.head_dim)
+        gate = torch.einsum("blhd,bhdk->blhk", x_heads, w0)
+        up = torch.einsum("blhd,bhdk->blhk", x_heads, w2)
+        hidden = F.silu(gate) * up
+        output = torch.einsum("blhk,bhkd->blhd", hidden, w1)
+        output = output.reshape(batch_size, seq_len, self.dim).to(output_dtype)
+        return output, x_heads, gate, up, hidden
+
+    def forward(self, x: torch.Tensor, fast_weights):
+        if self.apply_proj is not None:
+            x = self.apply_norm(self.apply_proj(x))
+        output, _, _, _, _ = self._apply_fast_weights(x, fast_weights)
+        output = self.output_norm(output)
+        if self.output_proj is not None:
+            output = self.output_proj(output)
+        return output
+
+    def update(
+        self,
+        memory_input: torch.Tensor,
+        target: torch.Tensor,
+        learning_rates: torch.Tensor,
+        fast_weights,
+        master_weights,
+        muon_update_steps: int,
+    ):
+        key = memory_input
+        if self.update_proj is not None:
+            key = self.apply_norm(self.update_proj(key))
+        return self.update_preprojected(
+            key,
+            target,
+            learning_rates,
+            fast_weights,
+            master_weights,
+            muon_update_steps,
+        )
+
+    def update_preprojected(
+        self,
+        key: torch.Tensor,
+        target: torch.Tensor,
+        learning_rates: torch.Tensor,
+        fast_weights,
+        master_weights,
+        muon_update_steps: int,
+    ):
+        w0, w1, w2 = fast_weights
+        master_w0, master_w1, master_w2 = master_weights
+        batch_size, seq_len, _ = key.shape
+        output, key_heads, gate, up, hidden = self._apply_fast_weights(key, fast_weights)
+
+        error = (target.float() - output.float()) / seq_len
+        error_heads = error.reshape(batch_size, seq_len, self.num_heads, self.head_dim)
+        d_hidden = torch.einsum("blhd,bhdk->blhk", error_heads, w1.float().transpose(-1, -2))
+        d_up = d_hidden * F.silu(gate)
+        d_gate = d_hidden * up
+        sigmoid = torch.sigmoid(gate)
+        d_gate_pre = d_gate * sigmoid * (1 + gate * (1 - sigmoid))
+
+        lr0, lr1, lr2 = learning_rates.float().split(1, dim=-1)
+        key_heads = key_heads.float()
+        hidden = hidden.float()
+        error_heads = error_heads.float()
+        d_gate_pre = d_gate_pre.float()
+        d_up = d_up.float()
+        batch_heads = batch_size * self.num_heads
+        gradient_left = (
+            torch.stack(
+                (
+                    key_heads * lr0.unsqueeze(2),
+                    error_heads,
+                    key_heads * lr2.unsqueeze(2),
+                )
+            )
+            .permute(0, 1, 3, 4, 2)
+            .reshape(3 * batch_heads, self.head_dim, seq_len)
+        )
+        gradient_right = (
+            torch.stack(
+                (
+                    d_gate_pre,
+                    hidden * lr1.unsqueeze(2),
+                    d_up,
+                )
+            )
+            .permute(0, 1, 3, 2, 4)
+            .reshape(3 * batch_heads, seq_len, self.hidden_dim)
+        )
+        w0_grad, w1_grad_transposed, w2_grad = (
+            torch.bmm(gradient_left, gradient_right)
+            .reshape(
+                3,
+                batch_size,
+                self.num_heads,
+                self.head_dim,
+                self.hidden_dim,
+            )
+            .unbind(0)
+        )
+        w1_grad = w1_grad_transposed.transpose(-1, -2)
+
+        transpose_w02 = self.head_dim > self.hidden_dim
+        if transpose_w02:
+            muon_gradients = torch.stack((w0_grad.transpose(-1, -2), w1_grad, w2_grad.transpose(-1, -2)))
+        else:
+            muon_gradients = torch.stack((w0_grad, w1_grad.transpose(-1, -2), w2_grad))
+        muon_updates = zeropower_via_newtonschulz5(muon_gradients.flatten(0, 2), muon_update_steps).reshape_as(
+            muon_gradients
+        )
+        w0_update, w1_update_oriented, w2_update = muon_updates.unbind(0)
+        if transpose_w02:
+            w0_update = w0_update.transpose(-1, -2)
+            w1_update = w1_update_oriented
+            w2_update = w2_update.transpose(-1, -2)
+        else:
+            w1_update = w1_update_oriented.transpose(-1, -2)
+        master_weights = (
+            master_w0 + w0_update.to(master_w0.dtype),
+            master_w1 + w1_update.to(master_w1.dtype),
+            master_w2 + w2_update.to(master_w2.dtype),
+        )
+        fast_weights = tuple(F.normalize(weight, dim=2, eps=1e-5).to(w0.dtype) for weight in master_weights)
+        return fast_weights, master_weights
+
+
+class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
+    """Original 4-frame attention followed by recurrent VideoLACT fast weights."""
+
+    def __init__(
+        self,
+        num_heads: int,
+        hidden_dim: int,
+        mlp_dim: int,
+        *,
+        attn_impl: str = "eager_attention",
+        activation=F.gelu,
+        attn_bias: bool = False,
+        fw_inter_multi: float = 2,
+        fw_num_heads: int = 1,
+        fw_base_lr: float = 0.01,
+        fw_muon_update_steps: int = 5,
+        fw_share_proj: bool = False,
+        fw_share_init: bool = True,
+        fw_norm_epsilon: float = 1e-5,
+    ):
+        super().__init__(
+            num_heads=num_heads,
+            hidden_dim=hidden_dim,
+            mlp_dim=mlp_dim,
+            attn_impl=attn_impl,
+            activation=activation,
+            attn_bias=attn_bias,
+        )
+        if fw_base_lr <= 0:
+            raise ValueError(f"fw_base_lr must be positive, got {fw_base_lr}")
+        if fw_muon_update_steps < 0:
+            raise ValueError(f"fw_muon_update_steps must be non-negative, got {fw_muon_update_steps}")
+        self.fw_share_proj = fw_share_proj
+        self.fw_share_init = fw_share_init
+        self.memory_norm = nn.RMSNorm(hidden_dim, eps=fw_norm_epsilon)
+        self.memory = FastWeightSwiGLU(
+            hidden_dim,
+            inter_multi=fw_inter_multi,
+            num_heads=fw_num_heads,
+            share_proj=fw_share_proj,
+            norm_epsilon=fw_norm_epsilon,
+        )
+        self.value_proj = None if fw_share_proj else nn.Linear(hidden_dim, hidden_dim, bias=False)
+        self.memory_gate = nn.Parameter(torch.zeros(hidden_dim))
+        self.lr_proj = nn.Linear(hidden_dim, 3, bias=False)
+        self.base_lr_inverse = inverse_softplus(fw_base_lr)
+        self.muon_update_steps = fw_muon_update_steps
+        self.reset_lact_parameters()
+
+    @torch.no_grad()
+    def reset_lact_parameters(self) -> None:
+        nn.init.ones_(self.memory_norm.weight)
+        if getattr(self.memory_norm, "bias", None) is not None:
+            nn.init.zeros_(self.memory_norm.bias)
+        self.memory.reset_parameters()
+        nn.init.trunc_normal_(self.lr_proj.weight, std=0.02)
+        nn.init.zeros_(self.memory_gate)
+        if self.value_proj is not None:
+            nn.init.trunc_normal_(self.value_proj.weight, std=0.02)
+        if self.fw_share_init and not self.fw_share_proj:
+            query_weight, key_weight, value_weight = self.wqkv.weight.detach().chunk(3, dim=0)
+            self.memory.apply_proj[0].weight.copy_(query_weight)
+            self.memory.update_proj[0].weight.copy_(key_weight)
+            self.value_proj.weight.copy_(value_weight)
+            self.memory.output_proj.weight.copy_(self.wo.weight.detach())
+
+    def init_fast_weights(self, batch_size: int):
+        return self.memory.init_fast_weights(batch_size)
+
+    def _shared_qkv(self, memory_input: torch.Tensor):
+        query, key, value = self.wqkv(memory_input).chunk(3, dim=-1)
+        query = self.memory.apply_norm(F.silu(query))
+        key = self.memory.apply_norm(F.silu(key))
+        return query, key, value.contiguous()
+
+    def forward_attention(
+        self,
+        hidden_states: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        rope_freqs_cis: torch.Tensor,
+    ) -> torch.Tensor:
+        residual = hidden_states
+        hidden_states = self.norm0(hidden_states)
+        attention = self.attention_qkvpacked(hidden_states, cu_seqlens, rope_freqs_cis=rope_freqs_cis)
+        return residual + attention
+
+    def apply_memory(
+        self,
+        hidden_states: torch.Tensor,
+        fast_weights,
+    ):
+        memory_input = self.memory_norm(hidden_states)
+        if self.fw_share_proj:
+            query, key, target = self._shared_qkv(memory_input)
+            memory_output = self.memory(query, fast_weights)
+            memory_output = self.wo(memory_output)
+        else:
+            key = target = memory_input
+            memory_output = self.memory(memory_input, fast_weights)
+        hidden_states = hidden_states + memory_output * self.memory_gate
+        return hidden_states, memory_input, key, target
+
+    def update_fast_weights(
+        self,
+        memory_input: torch.Tensor,
+        key: torch.Tensor,
+        target: torch.Tensor,
+        fast_weights,
+        master_weights,
+    ):
+        prediction_input = F.rms_norm(
+            memory_input,
+            normalized_shape=(memory_input.shape[-1],),
+            eps=1e-5,
+        )
+        update_input = key
+        if not self.fw_share_proj:
+            update_input = memory_input
+            target = self.value_proj(prediction_input)
+        with torch.autocast(device_type=memory_input.device.type, enabled=False):
+            learning_rates = F.softplus(
+                F.linear(prediction_input.float(), self.lr_proj.weight.float()) + self.base_lr_inverse
+            )
+        return self.memory.update(
+            update_input,
+            target,
+            learning_rates,
+            fast_weights,
+            master_weights,
+            self.muon_update_steps,
+        )
+
+    def forward_memory_scan(
+        self,
+        hidden_states: torch.Tensor,
+        clip_slices: list[tuple[int, int]],
+        video_clip_counts: list[int],
+    ) -> torch.Tensor:
+        outputs = []
+        clip_index = 0
+        for clip_count in video_clip_counts:
+            fast_weights, master_weights = self.init_fast_weights(batch_size=1)
+            for video_clip_index in range(clip_count):
+                start, end = clip_slices[clip_index]
+                clip_hidden = hidden_states[start:end].unsqueeze(0)
+                clip_hidden, memory_input, key, target = self.apply_memory(clip_hidden, fast_weights)
+                if video_clip_index + 1 < clip_count:
+                    fast_weights, master_weights = self.update_fast_weights(
+                        memory_input,
+                        key,
+                        target,
+                        fast_weights,
+                        master_weights,
+                    )
+                outputs.append(clip_hidden.squeeze(0))
+                clip_index += 1
+        if clip_index != len(clip_slices):
+            raise ValueError(f"Consumed {clip_index} clips, but layout contains {len(clip_slices)}")
+        return torch.cat(outputs, dim=0)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        rope_freqs_cis: torch.Tensor,
+        clip_slices: list[tuple[int, int]],
+        video_clip_counts: list[int],
+    ) -> torch.Tensor:
+        hidden_states = self.forward_attention(hidden_states, cu_seqlens, rope_freqs_cis)
+        hidden_states = self.forward_memory_scan(hidden_states, clip_slices, video_clip_counts)
+        residual = hidden_states
+        hidden_states = self.mlp(self.norm1(hidden_states))
+        return residual + hidden_states
+
+
+class VideoChat3LACTVisionEncoder(nn.Module):
+    def __init__(self, hidden_dim: int, num_layers: int, block_cfg: dict):
+        super().__init__()
+        from .modeling_vision import Rope2DPosEmb
+
+        self.rope_2d = Rope2DPosEmb(block_cfg["hidden_dim"] // block_cfg["num_heads"], 512, 512)
+        self.blocks = nn.ModuleList([VideoChat3LACTVisionLayer(**block_cfg) for _ in range(num_layers)])
+        self.final_layernorm = nn.LayerNorm(hidden_dim)
+
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        grid_thws: torch.Tensor,
+        video_clip_counts: list[int],
+    ) -> torch.Tensor:
+        rope_freqs_cis = self.rope_2d.get_freqs_cis(grid_thws=grid_thws)
+        lengths = (grid_thws[:, 0] * grid_thws[:, 1] * grid_thws[:, 2]).tolist()
+        offsets = [0]
+        for length in lengths:
+            offsets.append(offsets[-1] + int(length))
+        clip_slices = list(zip(offsets[:-1], offsets[1:]))
+        cu_seqlens = torch.tensor(offsets, device=hidden_states.device, dtype=torch.int32)
+        if sum(video_clip_counts) != len(clip_slices):
+            raise ValueError(f"video_clip_counts={video_clip_counts} do not cover {len(clip_slices)} clips")
+
+        for block in self.blocks:
+            hidden_states = block(
+                hidden_states,
+                cu_seqlens,
+                rope_freqs_cis,
+                clip_slices,
+                video_clip_counts,
+            )
+        return self.final_layernorm(hidden_states)
+
+
+class VideoChat3VisionLACTModel(VideoChat3VisionModel):
+    config: VideoChat3LACTVisionConfig
+
+    def __init__(self, config: VideoChat3LACTVisionConfig):
+        BaseModel.__init__(self)
+        self.config = config
+        self.patch_embed = VideoChat3VisionPatchEmbed(
+            out_dim=config.hidden_size,
+            patch_size=config.patch_size,
+            pos_emb_height=config.init_pos_emb_height,
+            pos_emb_width=config.init_pos_emb_width,
+            max_clip_length=config.temporal_merge_size,
+        )
+        self.encoder = VideoChat3LACTVisionEncoder(
+            hidden_dim=config.hidden_size,
+            num_layers=config.num_hidden_layers,
+            block_cfg={
+                "num_heads": config.num_attention_heads,
+                "hidden_dim": config.hidden_size,
+                "mlp_dim": config.intermediate_size,
+                "activation": ACT2FN["gelu_pytorch_tanh"],
+                "attn_bias": True,
+                "attn_impl": config.attn_impl,
+                "fw_inter_multi": config.fw_inter_multi,
+                "fw_num_heads": config.fw_num_heads,
+                "fw_base_lr": config.fw_base_lr,
+                "fw_muon_update_steps": config.fw_muon_update_steps,
+                "fw_share_proj": config.fw_share_proj,
+                "fw_share_init": config.fw_share_init,
+                "fw_norm_epsilon": config.fw_norm_epsilon,
+            },
+        )
+        self._hf_prefix = "model.vision_tower."
+        self._init_load_spec()
+
+    @staticmethod
+    def _is_lact_state_key(key: str) -> bool:
+        return any(
+            token in key
+            for token in (
+                ".memory_norm.",
+                ".memory.",
+                ".memory_gate",
+                ".lr_proj.",
+                ".value_proj.",
+            )
+        )
+
+    def _lact_local_keys(self) -> set[str]:
+        return {key for key in self.state_dict() if self._is_lact_state_key(key)}
+
+    def _lact_hf_keys(self) -> set[str]:
+        return {hf_key for key in self._lact_local_keys() for hf_key in self.to_hf_key_list(key)}
+
+    @torch.no_grad()
+    def reset_lact_parameters(self) -> None:
+        for block in self.encoder.blocks:
+            block.reset_lact_parameters()
+
+    @override
+    def init_weights(self) -> None:
+        super().init_weights()
+        self.reset_lact_parameters()
+
+    @override
+    def from_hf(self, hf_path: str | Path, strict: bool = True) -> tuple:
+        loaded, unloaded, missing = super().from_hf(hf_path, strict=False)
+        lact_hf_keys = self._lact_hf_keys()
+        missing_lact = missing & lact_hf_keys
+        if missing_lact:
+            if missing_lact != lact_hf_keys:
+                raise RuntimeError(
+                    f"Checkpoint contains only a partial VideoChat3 LACT memory state: missing={sorted(missing_lact)}"
+                )
+            self.reset_lact_parameters()
+        missing_base = missing - lact_hf_keys
+        if strict and missing_base:
+            raise RuntimeError(f"Missing baseline vision parameters: {sorted(missing_base)}")
+        unloaded = unloaded - self._lact_local_keys()
+        return loaded, unloaded, missing_base
+
+    @staticmethod
+    def split_grid_thws_clip_by_clip_with_counts(
+        grid_thws: torch.Tensor,
+        temporal_merge_size: int,
+    ) -> tuple[torch.Tensor, list[int]]:
+        split_grids = []
+        video_clip_counts = []
+        for time, height, width in grid_thws.tolist():
+            if time <= 0:
+                raise ValueError(f"Temporal grid size must be positive, got {time}")
+            remaining = time
+            clip_count = 0
+            while remaining > 0:
+                clip_time = min(remaining, temporal_merge_size)
+                split_grids.append([clip_time, height, width])
+                remaining -= clip_time
+                clip_count += 1
+            video_clip_counts.append(clip_count)
+        return (
+            torch.tensor(split_grids, device=grid_thws.device, dtype=grid_thws.dtype),
+            video_clip_counts,
+        )
+
+    def forward(self, pixel_values: torch.Tensor, grid_thws: torch.Tensor):
+        expected_tokens = int((grid_thws[:, 0] * grid_thws[:, 1] * grid_thws[:, 2]).sum())
+        split_grid_thws, video_clip_counts = self.split_grid_thws_clip_by_clip_with_counts(
+            grid_thws, self.config.temporal_merge_size
+        )
+        actual_tokens = int((split_grid_thws[:, 0] * split_grid_thws[:, 1] * split_grid_thws[:, 2]).sum())
+        if expected_tokens != actual_tokens:
+            raise ValueError(f"Split grid changed token count: {expected_tokens} != {actual_tokens}")
+        hidden_states = self.patch_embed(pixel_values, split_grid_thws)
+        hidden_states = self.encoder(hidden_states, split_grid_thws, video_clip_counts)
+        return patch_merger(
+            hidden_states,
+            split_grid_thws,
+            merge_kernel_size=self.config.merge_kernel_size,
+        )

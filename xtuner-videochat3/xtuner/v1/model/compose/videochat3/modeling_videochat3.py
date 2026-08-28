@@ -12,7 +12,7 @@ from xtuner.v1.ops.comm import split_for_sequence_parallel
 from xtuner.v1.utils import get_logger, get_padding_length, get_device
 from xtuner.v1.model import BaseModel
 
-from .modeling_vision import VideoChat3VisionModel, init_world_mesh
+from .modeling_vision import init_world_mesh
 from .modeling_projector import VideoChat3MultiModalProjector
 from typing_extensions import override
 from xtuner.v1.config import FSDPConfig
@@ -43,7 +43,7 @@ class VideoChat3ForConditionalGeneration(BaseModel):
         vision_config = config.vision_config
         text_config = config.text_config
 
-        self.vision_tower = VideoChat3VisionModel(vision_config)
+        self.vision_tower = vision_config.build()
         self.multi_modal_projector = VideoChat3MultiModalProjector(config.projector_config)
         self.language_model = text_config.build()
 
