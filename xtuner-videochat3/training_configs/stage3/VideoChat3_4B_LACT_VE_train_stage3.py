@@ -12,11 +12,11 @@ from xtuner.v1.train import ResumeConfig, TrainerConfig, WandbConfig
 
 run_name = os.getenv(
     "WANDB_NAME",
-    "vc3-4b-lact-fw4-ve-s3-lite-8xh100-gb16-f128-s16k-vitlr2p5e6-v2",
+    "vc3-4b-lact-fw4-ve-s3-full89k-8xh100-gb16-f128-s16k-vitlr2p5e6-v3",
 )
 model_path = Path("/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init")
 metadata_path = Path(
-    "/mnt/localssd/dataset/VideoChat3/VideoChat3-Stage3-Training-Data/VideoChat3_Stage3_Training_Data_local.json"
+    "/mnt/localssd/dataset/VideoChat3/VideoChat3-Stage3-Training-Data/VideoChat3_Stage3_Training_Data_full_local.json"
 )
 work_dir = Path("work_dir/stage3") / run_name
 cache_dir = Path("dataset_cache/cache_videochat3_4B_lact_stage3")
@@ -137,7 +137,7 @@ trainer = TrainerConfig(
             "fast-weight",
             "fw-window-4",
             "vision-encoder-only",
-            "stage3-lightweight",
+            "stage3-full-local",
         ],
         resume="allow",
         mode=os.getenv("WANDB_MODE", "online"),

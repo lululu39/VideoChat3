@@ -10,7 +10,7 @@ WATCHDOG_STATE_DIR="/mnt/localssd/VideoChat3/gpu_exclusive_watchdog"
 export WANDB_ENTITY="LVSM-Experiment"
 export WANDB_PROJECT="videochat3"
 export WANDB_BASE_URL="https://api.wandb.ai"
-export WANDB_NAME="${WANDB_NAME:-vc3-4b-lact-fw4-ve-s3-lite-8xh100-gb16-f128-s16k-vitlr2p5e6-v2}"
+export WANDB_NAME="${WANDB_NAME:-vc3-4b-lact-fw4-ve-s3-full89k-8xh100-gb16-f128-s16k-vitlr2p5e6-v3}"
 export WANDB_RUN_ID="${WANDB_RUN_ID:-${WANDB_NAME}}"
 export WANDB_MODE="${WANDB_MODE:-online}"
 export NNODES="${NNODES:-1}"
@@ -24,6 +24,9 @@ fi
 
 echo "W&B: https://wandb.ai/${WANDB_ENTITY}/${WANDB_PROJECT}"
 echo "Run: ${WANDB_NAME} (id=${WANDB_RUN_ID})"
+
+"${PROJECT_ROOT}/.venv/bin/python" \
+  "${PROJECT_ROOT}/scripts/build_stage3_full_local_annotations.py"
 
 if [[ "${GPU_EXCLUSIVE:-1}" != "1" ]]; then
   exec bash "${SCRIPT_DIR}/../run_sft.sh" \
