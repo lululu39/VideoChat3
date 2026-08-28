@@ -13,7 +13,7 @@ from xtuner.v1.train import ResumeConfig, TrainerConfig, WandbConfig
 
 run_name = os.getenv(
     "WANDB_NAME",
-    "vc3-4b-lact-fw4-ve-s3-full89k-8xh100-gb16-f128-s8k-vitlr2p5e6-ns5r1-v1",
+    "vc3-4b-lact-fw4-ve-s3-full89k-8xh100-gb16-f3600-s8k-vitlr2p5e6-ns5r1-v1",
 )
 model_path = Path("/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init")
 metadata_path = Path(
@@ -33,7 +33,7 @@ sample_max_length = 8192
 pack_max_length = 8192
 frame_max_pixels = 224 * 224
 video_max_total_pixels = 128 * frame_max_pixels
-video_max_frames = 128
+video_max_frames = 3600
 reference_global_batch_size = 128
 reference_vit_lr = 8e-5 / 4
 global_batch_size = 16
