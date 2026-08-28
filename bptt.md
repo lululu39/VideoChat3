@@ -83,13 +83,82 @@ $$
 例如每一步在其实际输入梯度方向上都放大 $1.2$ 倍，经过 32 步就是
 $1.2^{32}\approx341$ 倍。这就是 BPTT 中“每步小幅放大，长链后爆炸”的来源。
 
-LACT 的完整 transition 不是只有 NS5。记 InnerGrad、NS5 和 Normalize 的 Jacobian
-分别为 $H_t$、$P_t$ 和 $N_t$，则：
+LACT 的完整 transition 不是只有 NS5。先为 Normalize 的输入引入中间变量：
+
+$$
+Z_t=S_{t-1}+U_t,
+\qquad
+S_t=\operatorname{Normalize}(Z_t).
+$$
+
+计算 state-transition Jacobian 时，将所有 state/update 矩阵理解为已经向量化，并将
+当前输入 $x_t$ 固定。记：
+
+$$
+\begin{aligned}
+H_t
+&=
+\frac{\partial\operatorname{vec}(G_t)}
+     {\partial\operatorname{vec}(S_{t-1})},
+&\quad&\text{InnerGrad 的 Jacobian}, \\
+P_t
+&=
+\frac{\partial\operatorname{vec}(U_t)}
+     {\partial\operatorname{vec}(G_t)},
+&&\text{NS5 的 Jacobian}, \\
+N_t
+&=
+\frac{\partial\operatorname{vec}(S_t)}
+     {\partial\operatorname{vec}(Z_t)},
+&&\text{Normalize 的 Jacobian}.
+\end{aligned}
+$$
+
+现在给 $S_{t-1}$ 一个任意小扰动 $\delta S_{t-1}$，沿 forward 计算图逐行传播：
+
+$$
+\begin{aligned}
+\delta G_t
+&=H_t\,\delta S_{t-1}, \\
+\delta U_t
+&=P_t\,\delta G_t
+=P_tH_t\,\delta S_{t-1}, \\
+\delta Z_t
+&=\delta S_{t-1}+\delta U_t
+=\left(I+P_tH_t\right)\delta S_{t-1}, \\
+\delta S_t
+&=N_t\,\delta Z_t
+=N_t\left(I+P_tH_t\right)\delta S_{t-1}.
+\end{aligned}
+$$
+
+第三行的 $I$ 来自 residual state 路径 $S_{t-1}\rightarrow Z_t$；$P_tH_t$ 来自
+$S_{t-1}\rightarrow G_t\rightarrow U_t\rightarrow Z_t$ 这条 FW update 路径。两条
+路径在加法节点相加，所以得到 $I+P_tH_t$。Normalize 在加法之后执行，因此它的
+Jacobian $N_t$ 左乘整个括号。
+
+根据 Jacobian 的定义，$\delta S_t$ 中乘在 $\delta S_{t-1}$ 前面的线性算子就是：
 
 $$
 J_t
 =
 N_t\left(I+P_tH_t\right),
+$$
+
+矩阵乘法从右向左作用：先经过 InnerGrad 的 $H_t$，再经过 NS5 的 $P_t$，最后经过
+Normalize 的 $N_t$。等价地，直接使用链式法则可写为：
+
+$$
+\begin{aligned}
+\frac{\partial Z_t}{\partial S_{t-1}}
+&=
+I+P_tH_t, \\
+\frac{\partial S_t}{\partial S_{t-1}}
+&=
+\frac{\partial S_t}{\partial Z_t}
+\frac{\partial Z_t}{\partial S_{t-1}}
+=N_t\left(I+P_tH_t\right).
+\end{aligned}
 $$
 
 对应的 future backward 为：
