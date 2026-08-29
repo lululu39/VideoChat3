@@ -18,13 +18,13 @@ def download(repo_id: str, local_dir: Path, *, revision: str | None = None) -> N
         repo_type="dataset",
         revision=revision,
         local_dir=local_dir,
+        max_workers=2,
     )
 
 
 def main() -> None:
     DATA_ROOT.mkdir(parents=True, exist_ok=True)
     download("lmms-eval/Video-MME", VIDEO_MME_ROOT)
-    download("OpenGVLab/MVBench", MVBENCH_ROOT, revision="video")
 
     os.environ["VIDEOMME_ROOT"] = str(VIDEO_MME_ROOT)
     os.environ["MVBENCH_ROOT"] = str(MVBENCH_ROOT)
@@ -34,6 +34,7 @@ def main() -> None:
     from vlmeval.dataset.videomme import VideoMME
 
     VideoMME(dataset="Video-MME", fps=2.0, frames_limit=1024)
+    download("OpenGVLab/MVBench", MVBENCH_ROOT, revision="video")
     MVBench_MP4(dataset="MVBench_MP4", nframe=64)
 
 
