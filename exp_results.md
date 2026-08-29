@@ -77,10 +77,11 @@ Mean pre-clip gradient norm was `0.387`, maximum `1.820`, and only 7/208 steps e
 
 | Benchmark | Base | v2 | Delta |
 |---|---:|---:|---:|
-| Video-MME Short | 80.70 | Pending | Pending |
-| Video-MME Long | 60.30 | Pending | Pending |
-| MVBench MP4 64-frame | 70.83 | Pending | Pending |
-| MMBench DEV EN V1.1 | 35.91 | Pending | Pending |
+| Video-MME Short | 80.70 | 80.90 | +0.20 |
+| Video-MME Long | 60.30 | 60.10 | -0.20 |
+| MVBench MP4 64-frame | 70.83 | 70.80 | -0.03 |
+| MMBench DEV EN V1.1 | 35.91 | 35.45 | -0.46 |
 
 Native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-lact-v2-core`.
 
+Conclusion: v2 moved the FW parameters far more than v1 and avoided almost all global clipping, but remained at Base parity and did not improve Video-MME Long. Freezing the original ViT prevented image capability from drifting as much as v1, yet the learned gate RMS of `4.85e-4` still produced only a small behavioral change. A follow-up should change the supervision mix or gate/FW optimization rather than repeat this lightweight FW-only recipe unchanged.
