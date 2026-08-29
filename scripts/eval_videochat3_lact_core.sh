@@ -4,6 +4,7 @@ set -euo pipefail
 PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 EVAL_ROOT="${PROJECT_ROOT}/vlmevalkit-videochat3"
 EVAL_ID="videochat3-lact-lite31k-core"
+WANDB_EVAL_NAME="vc3-lact-lite31k-core-eval-v1"
 CONFIG_PATH="${EVAL_ROOT}/configs/videochat3_lact_core_eval.json"
 OUTPUT_ROOT="/mnt/localssd/VideoChat3/eval/${EVAL_ID}"
 WATCHDOG_LOG="/mnt/localssd/VideoChat3/gpu_exclusive_watchdog/eval_${EVAL_ID}.jsonl"
@@ -50,5 +51,19 @@ set -e
 trap - INT TERM EXIT
 if (( watchdog_status != 0 )); then
   echo "GPU watchdog exited with status ${watchdog_status}" >&2
+fi
+
+if (( eval_status == 0 )); then
+  export WANDB_BASE_URL="https://api.wandb.ai"
+  if [[ -n "${WANDB_PUBLIC_API_KEY:-}" ]]; then
+    export WANDB_API_KEY="${WANDB_PUBLIC_API_KEY}"
+  else
+    unset WANDB_API_KEY
+  fi
+  "${PROJECT_ROOT}/.venv/bin/python" \
+    "${PROJECT_ROOT}/scripts/upload_videochat3_eval_wandb.py" \
+    --output-root "${OUTPUT_ROOT}" \
+    --eval-config "${CONFIG_PATH}" \
+    --run-name "${WANDB_EVAL_NAME}"
 fi
 exit "${eval_status}"
