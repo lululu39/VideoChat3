@@ -107,6 +107,28 @@ def _write_tiny_base_config(path: Path, model_config) -> None:
     (path / "config.json").write_text(json.dumps(config, indent=2))
 
 
+def test_lact_only_config_freezes_every_original_vision_parameter():
+    model_config = _tiny_model_config().model_copy(
+        update={"train_lact_only": True},
+    )
+    model = model_config.build()
+    trainable = [
+        name
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad
+    ]
+    assert trainable
+    assert all(name.startswith("vision_tower.") for name in trainable)
+    assert all(
+        model.vision_tower._is_lact_state_key(
+            name.removeprefix("vision_tower."),
+        )
+        for name in trainable
+    )
+    assert any(name.endswith("memory_gate") for name in trainable)
+    assert not any(".wqkv." in name or ".mlp." in name for name in trainable)
+
+
 @pytest.mark.skipif(
     not (OFFICIAL_CHECKPOINT / "modeling_videochat3.py").is_file(),
     reason="Official VideoChat3 remote code is not available",

@@ -274,6 +274,38 @@ def test_state_ratio_clip_supports_checkpoint_recomputation():
         assert torch.all(previous_norm <= next_norm * (1 + 1e-6))
 
 
+def test_frozen_base_vision_keeps_lact_gradients_with_nonreentrant_checkpoint():
+    torch.manual_seed(9)
+    lact = VideoChat3LACTVisionConfig(
+        **_vision_kwargs(),
+        fw_muon_update_steps=0,
+    ).build()
+    lact.requires_grad_(False)
+    for name, parameter in lact.named_parameters():
+        if lact._is_lact_state_key(name):
+            parameter.requires_grad_(True)
+
+    pixel_values = torch.randn(32, 12)
+    grid_thws = torch.tensor([[8, 2, 2]], dtype=torch.int32)
+
+    def vision_forward(values):
+        return _flatten_outputs(lact(values, grid_thws))
+
+    output = checkpoint(
+        vision_forward,
+        pixel_values,
+        use_reentrant=False,
+    )
+    output.sum().backward()
+
+    assert all(block.memory_gate.grad is not None for block in lact.encoder.blocks)
+    assert all(
+        torch.count_nonzero(block.memory_gate.grad).item() > 0
+        for block in lact.encoder.blocks
+    )
+    assert all(block.wqkv.weight.grad is None for block in lact.encoder.blocks)
+
+
 def test_fused_fast_weight_update_matches_reference_formula():
     torch.manual_seed(3)
     memory = FastWeightSwiGLU(dim=8, inter_multi=2, num_heads=1, share_proj=True)

@@ -11,6 +11,10 @@ from xtuner.v1.model.compose.videochat3 import VideoChat3LACTVisionConfig
 from xtuner.v1.train import ResumeConfig, TrainerConfig, WandbConfig
 
 
+def env_bool(name: str, default: bool = False) -> bool:
+    return os.getenv(name, str(default)).lower() in {"1", "true", "yes"}
+
+
 run_name = os.getenv(
     "WANDB_NAME",
     "vc3-4b-lact-fw4-ve-s3-full89k-8xh100-gb16-f3600-s8k-vitlr2p5e6-ns5r1-stgr1-v1",
@@ -24,6 +28,7 @@ metadata_path = Path(
     )
 )
 dataset_tag = os.getenv("VIDEOCHAT3_STAGE3_DATASET_TAG", "stage3-full-local")
+training_tag = os.getenv("VIDEOCHAT3_TRAINING_TAG")
 work_dir = Path("work_dir/stage3") / run_name
 cache_dir = Path(
     os.getenv(
@@ -33,6 +38,7 @@ cache_dir = Path(
 )
 
 model_cfg = VideoChat3LACTDense4BConfig(
+    train_lact_only=env_bool("VIDEOCHAT3_TRAIN_LACT_ONLY"),
     vision_config=VideoChat3LACTVisionConfig(
         attn_impl="flash_attention_2",
         clip_ns_grad_ratio=True,
@@ -54,11 +60,21 @@ hf_max_keep = 1
 checkpoint_interval = 100
 checkpoint_maxkeep = 1
 
-vit_lr = reference_vit_lr * global_batch_size / reference_global_batch_size
+vit_lr = float(
+    os.getenv(
+        "VIDEOCHAT3_VIT_LR",
+        reference_vit_lr * global_batch_size / reference_global_batch_size,
+    )
+)
 lr = vit_lr
 weight_decay = 0.0
 warmup_ratio = 0.03
-lr_min = 1e-6 * global_batch_size / reference_global_batch_size
+lr_min = float(
+    os.getenv(
+        "VIDEOCHAT3_LR_MIN",
+        1e-6 * global_batch_size / reference_global_batch_size,
+    )
+)
 recompute_ratio = 1.0
 loss_reduction = "square"
 
@@ -148,16 +164,19 @@ trainer = TrainerConfig(
         run_id=os.getenv("WANDB_RUN_ID", run_name),
         group="videochat3-lact-stage3-ve",
         job_type="train",
-        tags=[
-            "videochat3-4b",
-            "lact",
-            "fast-weight",
-            "fw-window-4",
-            "ns5-ratio-clip-rho1",
-            "state-ratio-clip-rho1",
-            "vision-encoder-only",
-            dataset_tag,
-        ],
+        tags=(
+            [
+                "videochat3-4b",
+                "lact",
+                "fast-weight",
+                "fw-window-4",
+                "ns5-ratio-clip-rho1",
+                "state-ratio-clip-rho1",
+                "vision-encoder-only",
+                dataset_tag,
+            ]
+            + ([training_tag] if training_tag else [])
+        ),
         resume="allow",
         mode=os.getenv("WANDB_MODE", "online"),
     ),

@@ -88,6 +88,20 @@ class VideoChat3ForConditionalGeneration(BaseModel):
             self.language_model.requires_grad_(False)
             self.language_model.eval()
             logger.info("Freeze language model")
+        if getattr(self.config, "train_lact_only", False):
+            if freeze_vision:
+                raise ValueError("train_lact_only requires freeze_vision=False")
+            if not hasattr(self.vision_tower, "_is_lact_state_key"):
+                raise TypeError("train_lact_only requires a VideoChat3 LACT vision tower")
+            self.vision_tower.requires_grad_(False)
+            trainable_numel = 0
+            for name, parameter in self.vision_tower.named_parameters():
+                if self.vision_tower._is_lact_state_key(name):
+                    parameter.requires_grad_(True)
+                    trainable_numel += parameter.numel()
+            logger.info(
+                f"Train LACT-only vision parameters: {trainable_numel / 1e6:.1f}M"
+            )
 
     @override
     def fully_shard(

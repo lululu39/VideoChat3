@@ -695,6 +695,11 @@ class VideoChat3VisionModel(BaseModel):
 
         recompute_ratio = fsdp_config.vision_recompute_ratio
         num_recompute_layers = int(len(self.encoder.blocks) * recompute_ratio)
+        checkpoint_impl = (
+            CheckpointImpl.NO_REENTRANT
+            if any(not parameter.requires_grad for parameter in self.parameters())
+            else CheckpointImpl.REENTRANT
+        )
         generator = torch.Generator()
         generator.manual_seed(dist.get_rank())
         shuffled_layers_idxs = torch.randperm(len(self.encoder.blocks), generator=generator)
@@ -706,7 +711,7 @@ class VideoChat3VisionModel(BaseModel):
             if layer_idx < num_recompute_layers:
                 layer = checkpoint_wrapper(layer, 
                                         preserve_rng_state=checkpoint_preserve_rng_state,
-                                        checkpoint_impl=CheckpointImpl.REENTRANT)
+                                        checkpoint_impl=checkpoint_impl)
 
             self.encoder.blocks[layer_idx] = layer
 

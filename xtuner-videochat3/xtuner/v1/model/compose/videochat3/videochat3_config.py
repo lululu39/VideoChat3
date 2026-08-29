@@ -190,6 +190,7 @@ class VideoChat3LACTDense4BConfig(VideoChat3BaseConfig):
     freeze_vision: bool = False
     freeze_projector: bool = True
     freeze_language: bool = True
+    train_lact_only: bool = False
 
     def build(self) -> "VideoChat3LACTForConditionalGeneration":
         from .modeling_videochat3 import (

@@ -48,3 +48,20 @@
 
 - v1 approximately preserves the base model but shows no measurable long-video gain and about one point of image-benchmark regression.
 - Do not repeat this exact optimizer/data mix at larger scale. A follow-up should prioritize LV/OL data and make the FW channel learn explicitly, for example by freezing or strongly downscaling the original ViT while using a larger FW/gate LR.
+
+## v2 - Lightweight, FW-Only Training
+
+**Status:** Running.
+
+### Setup
+
+- Objective: test whether v1 failed because the pretrained ViT absorbed the task gradient while the zero-gated FW channel stayed inactive.
+- Initialization and data: same LACT init and original lightweight manifest as v1, enabling a controlled optimizer/trainable-scope comparison.
+- Trainable scope: only the 358.47M newly added LACT parameters (`memory`, private projections, value/LR projections, memory norm, and memory gate); original ViT, projector, and LM are frozen.
+- Recipe: 8xH100, global batch 16, 8K packs, f3600, one epoch / expected 208 steps, FW LR `2e-5`, min LR `1e-6`, cosine decay, 3% warmup, weight decay 0, global grad norm 1.
+- Stabilization: rho-1 NS5 and complete state-adjoint ratio clipping remain enabled. Mixed frozen/trainable vision blocks use non-reentrant activation checkpointing so FW gradients are retained even when frozen block inputs do not require gradients.
+- Training W&B: [`vc3-4b-lact-fw4-fwonly-s3-lite31k-8xh100-gb16-f3600-s8k-fwlr2e5-ns5r1-stgr1-v2`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-fw4-fwonly-s3-lite31k-8xh100-gb16-f3600-s8k-fwlr2e5-ns5r1-stgr1-v2).
+
+### Artifact And Evaluation
+
+- Pending completion. Compare gate/effective-memory growth and the same core Base-vs-LACT evaluation used by v1 before changing the data mixture.
