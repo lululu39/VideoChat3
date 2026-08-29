@@ -139,16 +139,30 @@ class VisionComposeTrainEngine(TrainEngine):
         return model
 
     def build_optimizer(self, optim_cfg: OptimConfig) -> torch.optim.Optimizer:
-        """Build optimizer with separate learning rates for ViT, Projector, and LLM."""
-        # 收集各部分的可训练参数
-        vit_params = [p for p in self.model.vision_tower.parameters() if p.requires_grad]
+        """Build optimizer groups for vision, LACT, projector, and language parameters."""
+        lact_params = []
+        if isinstance(optim_cfg, VisionAdamWConfig) and optim_cfg.lact_lr is not None:
+            is_lact_state_key = getattr(self.model.vision_tower, "_is_lact_state_key", None)
+            if is_lact_state_key is None:
+                raise TypeError("lact_lr requires a vision tower that identifies LACT state parameters")
+            vit_params = []
+            for name, param in self.model.vision_tower.named_parameters():
+                if not param.requires_grad:
+                    continue
+                if is_lact_state_key(name):
+                    lact_params.append(param)
+                else:
+                    vit_params.append(param)
+            if not lact_params:
+                raise ValueError("lact_lr was set, but no trainable LACT parameters were found")
+        else:
+            vit_params = [p for p in self.model.vision_tower.parameters() if p.requires_grad]
         projector_params = [p for p in self.model.multi_modal_projector.parameters() if p.requires_grad]
         llm_params = [p for p in self.model.language_model.parameters() if p.requires_grad]
-        
-        # 检查是否有其他可学习参数
-        known_param_count = len(vit_params) + len(projector_params) + len(llm_params)
+
+        known_param_count = len(vit_params) + len(lact_params) + len(projector_params) + len(llm_params)
         all_trainable_params = [(name, p) for name, p in self.model.named_parameters() if p.requires_grad]
-        
+
         if len(all_trainable_params) != known_param_count:
             other_param_names = [
                 name for name, _ in all_trainable_params
@@ -161,28 +175,36 @@ class VisionComposeTrainEngine(TrainEngine):
                 "Please check the model structure or update build_optimizer to handle these parameters."
             )
 
-        # 统计参数量
         vit_num = sum(p.numel() for p in vit_params)
+        lact_num = sum(p.numel() for p in lact_params)
         projector_num = sum(p.numel() for p in projector_params)
         llm_num = sum(p.numel() for p in llm_params)
-        total_num = vit_num + projector_num + llm_num
+        total_num = vit_num + lact_num + projector_num + llm_num
 
         if dist.get_rank() == 0:
             logger.info(f"Trainable parameters - ViT: {vit_num // 1e6:.1f}M, "
+                       f"LACT FW: {lact_num // 1e6:.1f}M, "
                        f"Projector: {projector_num // 1e6:.1f}M, LLM: {llm_num // 1e6:.1f}M, "
                        f"Total: {total_num // 1e6:.1f}M")
 
-        # 如果是 VisionAdamWConfig，使用分组学习率
         if isinstance(optim_cfg, VisionAdamWConfig):
             if dist.get_rank() == 0:
                 vit_lr = optim_cfg.vit_lr if optim_cfg.vit_lr is not None else optim_cfg.lr
+                lact_lr = optim_cfg.lact_lr if optim_cfg.lact_lr is not None else vit_lr
                 proj_lr = optim_cfg.projector_lr if optim_cfg.projector_lr is not None else optim_cfg.lr
                 llm_lr = optim_cfg.llm_lr if optim_cfg.llm_lr is not None else optim_cfg.lr
-                logger.info(f"Learning rates - ViT: {vit_lr}, Projector: {proj_lr}, LLM: {llm_lr}")
-            return optim_cfg.build_with_param_groups(vit_params, projector_params, llm_params)
+                logger.info(
+                    f"Learning rates - ViT: {vit_lr}, LACT FW: {lact_lr}, "
+                    f"Projector: {proj_lr}, LLM: {llm_lr}"
+                )
+            return optim_cfg.build_with_param_groups(
+                vit_params,
+                projector_params,
+                llm_params,
+                lact_params=lact_params,
+            )
         else:
-            # 使用默认的单一学习率
-            all_params = vit_params + projector_params + llm_params
+            all_params = vit_params + lact_params + projector_params + llm_params
             return optim_cfg.build(all_params)
 
     def from_hf(self, hf_path: str | Path, strict: bool = False):

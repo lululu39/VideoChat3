@@ -66,6 +66,8 @@ vit_lr = float(
         reference_vit_lr * global_batch_size / reference_global_batch_size,
     )
 )
+lact_lr = os.getenv("VIDEOCHAT3_LACT_LR")
+lact_lr = float(lact_lr) if lact_lr is not None else None
 lr = vit_lr
 weight_decay = 0.0
 warmup_ratio = 0.03
@@ -75,6 +77,8 @@ lr_min = float(
         1e-6 * global_batch_size / reference_global_batch_size,
     )
 )
+lr_min_ratio = os.getenv("VIDEOCHAT3_LR_MIN_RATIO")
+lr_min_ratio = float(lr_min_ratio) if lr_min_ratio is not None else None
 recompute_ratio = 1.0
 loss_reduction = "square"
 
@@ -134,6 +138,7 @@ dataloader_config = DataloaderConfig(
 
 optim_cfg = VisionAdamWConfig(
     vit_lr=vit_lr,
+    lact_lr=lact_lr,
     projector_lr=lr,
     lr=lr,
     weight_decay=weight_decay,
@@ -143,6 +148,7 @@ lr_cfg = LRConfig(
     lr_type="cosine",
     warmup_ratio=warmup_ratio,
     lr_min=lr_min,
+    lr_min_ratio=lr_min_ratio,
 )
 fsdp_cfg = FSDPConfig(
     sp_size=1,

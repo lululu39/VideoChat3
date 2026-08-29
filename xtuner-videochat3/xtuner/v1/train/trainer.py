@@ -2,6 +2,7 @@ import contextlib
 import gc
 import inspect
 import json
+import math
 import os
 import pickle
 import sys
@@ -994,7 +995,24 @@ class Trainer:
         warmup_scheduler = LambdaLR(self._engine.optimizer, warmup_fn)
 
         scheduler: torch.optim.lr_scheduler.LRScheduler
-        if lr_cfg.lr_type == "linear":
+        if lr_cfg.lr_min_ratio is not None:
+            if not 0 <= lr_cfg.lr_min_ratio <= 1:
+                raise ValueError(f"lr_min_ratio must be in [0, 1], got {lr_cfg.lr_min_ratio}")
+            decay_steps = scheduler_step - warmup_steps
+
+            def decay_fn(step):
+                progress = min(step / decay_steps, 1.0)
+                if lr_cfg.lr_type == "linear":
+                    return 1.0 - (1.0 - lr_cfg.lr_min_ratio) * progress
+                if lr_cfg.lr_type == "cosine":
+                    cosine = (1.0 + math.cos(math.pi * progress)) / 2.0
+                    return lr_cfg.lr_min_ratio + (1.0 - lr_cfg.lr_min_ratio) * cosine
+                if lr_cfg.lr_type == "constant":
+                    return 1.0
+                raise ValueError(f"Unsupported lr type: {lr_cfg.lr_type}")
+
+            scheduler = LambdaLR(self._engine.optimizer, decay_fn)
+        elif lr_cfg.lr_type == "linear":
             scheduler = LinearLR(
                 self._engine.optimizer,
                 start_factor=1.0,
@@ -1370,7 +1388,13 @@ class Trainer:
         """Log the training step information."""
         tgs = step_consumed_tokens / step_time
         e2e_tgs = total_consumed_tokens / train_time
-        lr = self._lr_scheduler.get_last_lr()[0]
+        group_lrs = self._lr_scheduler.get_last_lr()
+        lr = group_lrs[0]
+        named_group_lrs = {
+            group.get("name", f"group_{index}"): group_lr
+            for index, (group, group_lr) in enumerate(zip(self._engine.optimizer.param_groups, group_lrs))
+        }
+        group_lr_log = " ".join(f"{name}={value:.6e}" for name, value in named_group_lrs.items())
 
         remaining_steps = self.total_step - self.cur_step
         avg_tokens_per_step = total_consumed_tokens / self.cur_step
@@ -1385,7 +1409,8 @@ class Trainer:
         reserved_memory = DEVICE_MODULE.max_memory_reserved()  # type: ignore[attr-defined]
 
         self.logger.info(
-            f"Epoch {self._cur_epoch} Step {self.cur_step}/{self.total_step} data_time: {data_time:.4f} lr: {lr:.6e} time: {step_time:.4f} "
+            f"Epoch {self._cur_epoch} Step {self.cur_step}/{self.total_step} data_time: {data_time:.4f} "
+            f"lr: {lr:.6e} lr_groups: {group_lr_log} time: {step_time:.4f} "
             f"text_tokens: {step_consumed_tokens} "
             f"total_consumed_tokens: {total_consumed_tokens} "
             f"{loss_log_str} "
@@ -1412,6 +1437,7 @@ class Trainer:
             "memory/reserved_memory_GB": round(reserved_memory / (1024**3), 3),
             "grad_norm": grad_norm,
         }
+        log_scalars.update({f"lr_groups/{name}": value for name, value in named_group_lrs.items()})
         log_scalars.update({f"loss/{k}": v for k, v in loss_log.items()})
         self._exp_tracker.add_scalars(tag_scalar_dict=log_scalars, global_step=self.cur_step)
 
