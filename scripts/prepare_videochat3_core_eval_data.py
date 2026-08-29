@@ -3,7 +3,7 @@
 import os
 from pathlib import Path
 
-from huggingface_hub import snapshot_download
+from huggingface_hub import get_token, snapshot_download
 
 
 DATA_ROOT = Path("/mnt/localssd/dataset/VLMEvalKit")
@@ -18,7 +18,8 @@ def download(repo_id: str, local_dir: Path, *, revision: str | None = None) -> N
         repo_type="dataset",
         revision=revision,
         local_dir=local_dir,
-        max_workers=2,
+        max_workers=1,
+        token=os.environ.get("HUGGINGFACE_TOKEN") or get_token(),
     )
 
 

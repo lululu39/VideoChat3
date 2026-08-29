@@ -175,6 +175,8 @@ Based on your observations, select the best option that accurately addresses the
             if modelscope_flag_set():
                 from modelscope import dataset_snapshot_download
                 dataset_path = dataset_snapshot_download(dataset_id=repo_id, revision='master')
+            elif os.path.exists(str(repo_id)):
+                dataset_path = repo_id
             else:
                 hf_token = os.environ.get('HUGGINGFACE_TOKEN')
                 huggingface_hub.login(hf_token)
@@ -498,6 +500,8 @@ Based on your observations, select the best option that accurately addresses the
             if modelscope_flag_set():
                 from modelscope import dataset_snapshot_download
                 dataset_path = dataset_snapshot_download(dataset_id=repo_id, revision='video')
+            elif os.path.exists(str(repo_id)):
+                dataset_path = repo_id
             else:
                 hf_token = os.environ.get('HUGGINGFACE_TOKEN')
                 huggingface_hub.login(hf_token)
