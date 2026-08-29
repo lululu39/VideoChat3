@@ -118,18 +118,6 @@ def collect_core_scores(output_root: Path):
 
 
 def log_core_visualizations(run, scores):
-    run.define_metric("eval/model_index")
-    run.define_metric("eval/*", step_metric="eval/model_index")
-    for model_index, model_name in enumerate(("Base", "LACT")):
-        history = {"eval/model_index": model_index, "eval/model": model_name}
-        history.update(
-            {
-                f"eval/{benchmark}": value
-                for benchmark, value in scores[model_name].items()
-            }
-        )
-        run.log(history)
-
     comparison = wandb.Table(
         columns=["benchmark", "base", "lact", "delta_pp"],
     )
@@ -163,23 +151,25 @@ def parse_args():
     parser.add_argument("--output-root", type=Path, required=True)
     parser.add_argument("--eval-config", type=Path, required=True)
     parser.add_argument("--run-name", required=True)
+    parser.add_argument("--display-name")
     parser.add_argument("--entity", default="LVSM-Experiment")
     parser.add_argument("--project", default="videochat3")
     parser.add_argument("--skip-artifact", action="store_true")
+    parser.add_argument("--dashboard-only", action="store_true")
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    metrics = collect_metrics(args.output_root)
-    if not metrics:
+    metrics = {} if args.dashboard_only else collect_metrics(args.output_root)
+    if not args.dashboard_only and not metrics:
         raise RuntimeError(f"No evaluation metric files found under {args.output_root}")
 
     eval_config = json.loads(args.eval_config.read_text())
     run = wandb.init(
         entity=args.entity,
         project=args.project,
-        name=args.run_name,
+        name=args.display_name or args.run_name,
         id=args.run_name,
         resume="allow",
         group="videochat3-lact-eval",
@@ -187,11 +177,12 @@ def main():
         tags=["videochat3-4b", "lact", "core-eval-v1", "base-vs-lact"],
         config={"eval_config": eval_config},
     )
-    run.summary.update(metrics)
+    if metrics:
+        run.summary.update(metrics)
     run.summary["evaluation_complete"] = True
     log_core_visualizations(run, collect_core_scores(args.output_root))
 
-    if not args.skip_artifact:
+    if not args.skip_artifact and not args.dashboard_only:
         artifact = wandb.Artifact(
             name="videochat3-lact-core-eval-v1-results",
             type="evaluation",
