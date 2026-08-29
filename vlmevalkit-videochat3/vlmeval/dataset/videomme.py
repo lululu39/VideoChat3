@@ -7,6 +7,10 @@ from .utils import build_judge, DEBUG_MESSAGE
 FAIL_MSG = 'Failed to obtain answer via API.'
 
 
+def _default_videomme_root():
+    return os.environ.get('VIDEOMME_ROOT', 'lmms-eval/Video-MME')
+
+
 def unwrap_hf_pkl(pth, suffix='.mp4'):
     base_dir = os.path.join(pth, 'video_pkl/')
     target_dir = os.path.join(pth, 'video/')
@@ -100,7 +104,8 @@ Respond with only the letter (A, B, C, or D) of the correct option.
     def supported_datasets(cls):
         return ['Video-MME']
 
-    def prepare_dataset(self, dataset_name='Video-MME', repo_id='/mnt/petrelfs/zhuyuhan/s3/videogpu/zhuyuhan/benchmarks/Video-MME'):
+    def prepare_dataset(self, dataset_name='Video-MME', repo_id=None):
+        repo_id = repo_id or _default_videomme_root()
 
         def check_integrity(pth):
             data_file = osp.join(pth, f'{dataset_name}.tsv')

@@ -69,6 +69,12 @@
 - The valid full-local state-clipped run was stopped at step 22 without a checkpoint only because 2,287 measured steps implied roughly 45-55 hours. It is marked incomplete rather than invalid on W&B; the lightweight run is the active priority for producing an evaluation checkpoint sooner.
 - There is no semantics-free long-chain fix. The selected state-adjoint ratio clip preserves forward/inference and nonzero long-range credit but biases every state edge whose realized ratio exceeds one; TBPTT or `stop_state` removes long-range credit assignment entirely, while changing NS5 coefficients, normalization, head count, or update scale changes the FW update model. Keep the clipping options explicit in every experiment config.
 
+## Evaluation
+
+- The completed lightweight checkpoint is `work_dir/stage3/vc3-4b-lact-fw4-ve-s3-lite31k-8xh100-gb16-f3600-s8k-vitlr2p5e6-ns5r1-stgr1-v1/20260828223921/hf-208`; `hf-latest` points to it and strict HF export completed after all 208 steps.
+- The first base-vs-LACT evaluation uses `vlmevalkit-videochat3/configs/videochat3_lact_core_eval.json`: Video-MME short/long at 2 FPS (up to 1,024 frames), MVBench MP4 at 64 frames, and MMBench DEV EN V1.1 as an image-regression guardrail. Prepare public data under `/mnt/localssd/dataset/VLMEvalKit` with `scripts/prepare_videochat3_core_eval_data.py`, then launch eight-GPU resumable evaluation with `scripts/eval_videochat3_lact_core.sh`.
+- Video-MME is the broad duration-stratified benchmark, MVBench checks short temporal skills, and MMBench detects image degradation. LVBench is the preferred second-wave extreme-long benchmark, but its public HF repository does not include the videos; do not substitute MLVU first because its roughly 430 GB download is disproportionate to the remaining local SSD space.
+
 ## VideoMamba ViT/LACT Comparison
 
 - Image and video VideoViT share the same pre-norm attention and slow SwiGLU MLP parameter layout. VideoViT adds Conv3d tubelet embedding and temporal position; it uses one global CLS plus all tubelet patch tokens in full-sequence spatial-temporal attention, so it is not streaming.

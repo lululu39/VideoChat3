@@ -17,6 +17,10 @@ from .utils.mvbench import *
 FAIL_MSG = 'Failed to obtain answer via API.'
 
 
+def _default_mvbench_root():
+    return os.environ.get('MVBENCH_ROOT', 'OpenGVLab/MVBench')
+
+
 class MVBench(VideoBaseDataset):
 
     MD5 = 'fd21d36522cdedd46d84dc46715ad832'
@@ -76,7 +80,8 @@ Based on your observations, select the best option that accurately addresses the
     def supported_datasets(cls):
         return ['MVBench']
 
-    def prepare_dataset(self, dataset_name='MVBench', repo_id='OpenGVLab/MVBench'):
+    def prepare_dataset(self, dataset_name='MVBench', repo_id=None):
+        repo_id = repo_id or _default_mvbench_root()
         def check_integrity(pth):
             data_file = osp.join(pth, f'{dataset_name}.tsv')
 
@@ -444,7 +449,8 @@ Based on your observations, select the best option that accurately addresses the
     def supported_datasets(cls):
         return ['MVBench_MP4']
 
-    def prepare_dataset(self, dataset_name='MVBench_MP4', repo_id='OpenGVLab/MVBench'):
+    def prepare_dataset(self, dataset_name='MVBench_MP4', repo_id=None):
+        repo_id = repo_id or _default_mvbench_root()
         def check_integrity(pth):
             data_file = osp.join(pth, f'{dataset_name}.tsv')
 
