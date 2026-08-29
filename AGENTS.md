@@ -4,6 +4,9 @@
 
 - Keep this memo concise: retain only stable, code-backed conclusions; merge or delete stale detail instead of appending a diary.
 - Keep concise versioned training setups, checkpoint diagnostics, and Base-vs-LACT evaluation tables in `exp_results.md`; consult it for concrete experiment results.
+- When starting a numbered experiment, first create its `exp_results.md` section with status, objective, initialization, data, trainable scope, optimizer/LR schedule, stabilization, hardware/batch/sequence settings, W&B link, and expected artifact.
+- When training finishes, update that section with the final checkpoint and inspect key model state against initialization: memory-gate statistics, FW parameter-group deltas, original ViT/LM/projector integrity, and loss/gradient/clipping behavior.
+- When evaluation finishes, record the native artifact path, actual Base-vs-LACT Markdown table with deltas, and a concise conclusion in the same section. Reuse the fixed Base results unless the model, dataset, prompt, decoding, or evaluation protocol changed.
 - Treat executable model/data paths as authoritative over README wording and experiment names.
 - When comparing with `/data/yibo/VideoMamba`, inspect only VideoViT and VideoLACT; do not use Mamba or VideoMARS as references.
 - Store checkpoints under `/mnt/localssd/VideoChat3` and datasets under `/mnt/localssd/dataset/VideoChat3`; create these project-named directories when absent and never place downloaded artifacts in Git.
