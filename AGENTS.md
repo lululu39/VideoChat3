@@ -3,7 +3,7 @@
 ## Rules
 
 - Keep this memo concise: retain only stable, code-backed conclusions; merge or delete stale detail instead of appending a diary.
-- Keep all versioned experiment setups, checkpoints, W&B links, results, and conclusions in `exp_logs.md`; consult it when experiment history is needed.
+- Keep concise versioned training setups, checkpoint diagnostics, and Base-vs-LACT evaluation tables in `exp_results.md`; consult it for concrete experiment results.
 - Treat executable model/data paths as authoritative over README wording and experiment names.
 - When comparing with `/data/yibo/VideoMamba`, inspect only VideoViT and VideoLACT; do not use Mamba or VideoMARS as references.
 - Store checkpoints under `/mnt/localssd/VideoChat3` and datasets under `/mnt/localssd/dataset/VideoChat3`; create these project-named directories when absent and never place downloaded artifacts in Git.

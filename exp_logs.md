@@ -51,7 +51,7 @@
 
 ## v2 - Lightweight, FW-Only Training
 
-**Status:** Running.
+**Status:** Completed. Canonical diagnostics and evaluation are recorded in `exp_results.md`.
 
 ### Setup
 
@@ -65,4 +65,5 @@
 
 ### Artifact And Evaluation
 
-- Pending completion. Compare gate/effective-memory growth and the same core Base-vs-LACT evaluation used by v1 before changing the data mixture.
+- HF checkpoint: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-s3-lite31k-8xh100-gb16-f3600-s8k-fwlr2e5-ns5r1-stgr1-v2/20260829132333/hf-208`.
+- See `exp_results.md` for the parameter diagnostics and Base-vs-v2 core evaluation table.
