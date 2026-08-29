@@ -61,6 +61,7 @@
 - Recipe: 8xH100, global batch 16, 8K packs, f3600, one epoch / expected 208 steps, FW LR `2e-5`, min LR `1e-6`, cosine decay, 3% warmup, weight decay 0, global grad norm 1.
 - Stabilization: rho-1 NS5 and complete state-adjoint ratio clipping remain enabled. Mixed frozen/trainable vision blocks use non-reentrant activation checkpointing so FW gradients are retained even when frozen block inputs do not require gradients.
 - Training W&B: [`vc3-4b-lact-fw4-fwonly-s3-lite31k-8xh100-gb16-f3600-s8k-fwlr2e5-ns5r1-stgr1-v2`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-fw4-fwonly-s3-lite31k-8xh100-gb16-f3600-s8k-fwlr2e5-ns5r1-stgr1-v2).
+- Startup validation: 358.5M trainable parameters, first-three-step grad norms `0.466/0.459/0.200` without global clipping, peak memory 45.8 GB, and no partial-freeze/checkpoint failure.
 
 ### Artifact And Evaluation
 
