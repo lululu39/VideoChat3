@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import math
 from pathlib import Path
 
 import pandas as pd
@@ -15,7 +16,17 @@ def flatten_json(value, prefix=""):
             child_prefix = f"{prefix}/{key}" if prefix else str(key)
             metrics.update(flatten_json(child, child_prefix))
     elif isinstance(value, (int, float)) and not isinstance(value, bool):
-        metrics[prefix] = float(value)
+        numeric = float(value)
+        if math.isfinite(numeric):
+            metrics[prefix] = numeric
+    elif isinstance(value, str):
+        try:
+            numeric = float(value)
+        except ValueError:
+            pass
+        else:
+            if math.isfinite(numeric):
+                metrics[prefix] = numeric
     return metrics
 
 
