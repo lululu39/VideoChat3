@@ -25,13 +25,12 @@
 - Reproduce it with `install -d /mnt/localssd/VideoChat3/VideoChat3-4B`, then run `uv run --frozen python -c 'from huggingface_hub import snapshot_download; snapshot_download(repo_id="MCG-NJU/VideoChat3-4B", revision="37fa901ec5913f84bc31108ebc1e60ad1903634c", local_dir="/mnt/localssd/VideoChat3/VideoChat3-4B")'`.
 - Verify the 28 official file names/sizes, the three safetensors shards against `model.safetensors.index.json`, and local `AutoConfig`/`AutoProcessor` loading; SHA rechecking is unnecessary.
 
-## Stage 3 Data
+## Retired Stage 3 Data
 
-- The filtered lightweight snapshot is `lmwang/VideoChat3-Stage3-Training-Data` revision `a7def4abd394697856be9cd6276efa98a27f23df` at `/mnt/localssd/dataset/VideoChat3/VideoChat3-Stage3-Training-Data`.
-- Download with `snapshot_download` while ignoring `data/image/**`, `videochat3_data_annotations/image/**`, and `videochat3_data_annotations/text/**`. Molmo2 is only an external top-level reference and has no files to exclude in this repo.
-- The retained download was 57 files / 535.123 GiB: 28 Video tar shards, 4 Motion-Video tar shards, annotations/manifests, and top metadata. The released loader cannot read tar members directly.
-- Run `uv run --frozen python scripts/extract_stage3_lightweight.py --delete-tars` to validate, extract, decode-smoke, record recovery state, and permanently delete one verified shard at a time. It writes `.extraction_state.json`, `media/`, and `VideoChat3_Stage3_Training_Data_local.json` under the dataset root and is safe to resume.
-- Current extraction is complete: 32/32 shards, 148,649 media items / 570,408,255,436 source bytes, and no tar files remain. All 30,966 references in the 17 local annotations exist; real `VLMJsonlDataset` decoding/tokenization passed for all eight media roots.
+- v1-v3 used the filtered `lmwang/VideoChat3-Stage3-Training-Data` snapshot at revision `a7def4abd394697856be9cd6276efa98a27f23df`; the extracted local snapshot contained 148,649 media items and supplied the 30,966-reference lightweight manifest plus the derived 142,645-row full-local manifest.
+- After v1-v3 showed no stable gain and the full annotations were judged dominated by supervision that does not require cross-window memory, the official VideoChat3 training data was retired without running a full-annotation experiment.
+- On 2026-08-30, `/mnt/localssd/dataset/VideoChat3/VideoChat3-Stage3-Training-Data` (543G) and `/mnt/localssd/dataset/VideoChat3/VideoChat3-Training-Data-Annotations` (359M) were deleted, increasing `/mnt/localssd` free space from 381G to 926G. Do not redownload or use them unless the user explicitly reverses this decision.
+- Historical scripts, configs, checkpoints, logs, and evaluation artifacts remain for audit; future LACT training data must be independently sourced and curated for questions that actually require persistent cross-window state.
 
 ## VideoChat3 Model
 
@@ -52,9 +51,7 @@
 - LACT builds and HF saves use an independent `videochat3_lact` model with a `videochat3_lact_vision` encoder. They inherit all non-vision behavior, preserve original key names/processor assets, export custom `auto_map` code, and support strict XTuner resume plus VLMEvalKit/Transformers loading; `hf_interval` can remain enabled.
 - The retained initialization checkpoint is `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init` (9.1 GiB). `initialization_validation.json` confirms all 734 original tensors are bitwise equal, all 270 added tensors are FW-only, and 27/27 layers satisfy Q/K/V/O share-init plus zero gate.
 - `scripts/benchmark_videochat3_lact.py` records isolated BF16/FlashAttention H100 timings. For an 8-frame, 16x16 patch-grid video, LACT vision is about 5.5x slower, but full-VLM latency falls from 2.78x at 641 tokens to 2.00x/1.30x/1.04x at 2,177/8,321/32,897 tokens; see `benchmark_h100_long_context.json`. Zero gate does not bypass FW apply/update compute.
-- Run `scripts/build_stage3_full_local_annotations.py` to combine the full annotations in `MCG-NJU/VideoChat3-Training-Data-Annotations` revision `67763d972bcefa1d812119f63e10c97a3e5b19f6` with the downloaded local media. It writes filtered JSONLs under `full_local_annotations/`, `VideoChat3_Stage3_Training_Data_full_local.json`, and `full_local_annotations_summary.json`; the validated result is 20 entries, 142,645 rows, 89,260 unique media, and zero missing references.
-- Launch the 8xH100 Stage 3 vision-only run with `training_scripts/stage3/VideoChat3_4B_LACT_VE_train_stage3.sh`; the launcher rebuilds/validates the full-local annotations first. It uses the retained LACT init and logs rank-zero metrics to public W&B `LVSM-Experiment/videochat3` as `vc3-4b-lact-fw4-ve-s3-full89k-8xh100-gb16-f3600-s8k-vitlr2p5e6-ns5r1-stgr1-v1`, with JSONL on every rank. The run explicitly enables rho-1 NS5 and state-adjoint ratio clipping, uses global batch 16 (2 packs/rank), 8K packs, the official Stage 3 cap of 3,600 frames/video, and a total video-pixel budget of `128*224*224` that trades spatial resolution for longer temporal coverage. ViT LR `2.5e-6` is the common linear scaling of Stage 1 (`4e-5` at GB256) and Stage 2 (`2e-5` at GB128), with `lr_min=1.25e-7`.
-- Use `training_scripts/stage3/VideoChat3_4B_LACT_VE_train_stage3_lightweight.sh` for the original lightweight local manifest with a separate cache, W&B dataset tag, and work directory; see `exp_logs.md` for versioned outcomes.
+- The Stage 3 annotation builders and launchers are retained only to audit v1-v3; their deleted input paths make them intentionally non-runnable. See `exp_results.md` for the completed outcomes and dataset-retirement decision.
 - The LACT training launcher pins `WANDB_BASE_URL=https://api.wandb.ai`; it ignores the machine's Adobe-internal `WANDB_API_KEY` and uses the public netrc login, or `WANDB_PUBLIC_API_KEY` when explicitly supplied. Keep the run ID stable for auto-resume and change both name/ID for a new experiment version.
 
 ## LACT Training Stability
