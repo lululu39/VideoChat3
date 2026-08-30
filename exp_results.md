@@ -135,3 +135,17 @@ Conclusion: v3 produced the first positive Video-MME Long delta, but `+0.30` is 
 - On 2026-08-30, the extracted 543G Stage 3 dataset at `/mnt/localssd/dataset/VideoChat3/VideoChat3-Stage3-Training-Data` and the 359M full-annotation repository at `/mnt/localssd/dataset/VideoChat3/VideoChat3-Training-Data-Annotations` were permanently deleted. `/mnt/localssd` free space increased from 381G to 926G.
 - Retained: LACT initialization, v1-v3 HF/DCP checkpoints, training logs/W&B runs, core-evaluation artifacts, code, and these result tables.
 - Future experiments will use independently sourced data selected for genuine multi-event, temporal-order, state-tracking, or long-context dependencies rather than merely long raw video duration.
+
+## v4 - VideoChat-Flash LongVid, FW Only
+
+**Status:** Launching.
+
+- Objective: test whether explicit long-video event understanding, event relationship, and event counting supervision can open and train the LACT memory path where the retired lightweight Stage 3 mixture did not.
+- Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; no v1-v3 checkpoint reuse.
+- Data: VideoChat-Flash LongVid subset at revision `be87f5516a709be079cec8b727dd2287bf2dd70f`, converted into 5,870 QA rows over 5,478 per-dataset unique videos. Frame directories follow the official recipe: `img2`, 1 FPS semantics, 64-512 uniformly sampled frames, rounded down to a multiple of four. The converted cache contains 15,718,498 tokens, or 1,918.8 ideal 8K packs before packing overhead.
+- Trainable scope: the 358.47M LACT-added parameters only, including FW bases, private Q/K/V/O projections, memory gates, LR projections, and memory normalization. Original ViT, LM, and projector remain frozen, matching v2.
+- Optimizer and schedule: peak FW LR `2e-5`, minimum LR `1e-6`, cosine decay, 3% warmup, weight decay 0, and one epoch. This intentionally reuses v2's optimizer settings.
+- Stabilization: `clip_ns_grad_ratio=True`, `clip_state_grad_ratio=True`, both at rho 1, plus the framework's true FSDP global gradient norm clip at 1.0.
+- Hardware and packing: 8xH100, global batch 16, 8K sample/pack length, 1 FPS, 64-512 frames, four-frame LACT groups, and at most 127 effective FW updates per video. Ideal token accounting suggests about 120 optimizer steps; the actual packed step count will be recorded after startup.
+- Training W&B: [`v4`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-ns5r1-stgr1-v4).
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-ns5r1-stgr1-v4/<timestamp>/hf-<final_step>`.
