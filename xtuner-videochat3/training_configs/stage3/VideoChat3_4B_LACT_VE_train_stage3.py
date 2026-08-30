@@ -68,6 +68,8 @@ vit_lr = float(
 )
 lact_lr = os.getenv("VIDEOCHAT3_LACT_LR")
 lact_lr = float(lact_lr) if lact_lr is not None else None
+lact_gate_lr = os.getenv("VIDEOCHAT3_LACT_GATE_LR")
+lact_gate_lr = float(lact_gate_lr) if lact_gate_lr is not None else None
 lr = vit_lr
 weight_decay = 0.0
 warmup_ratio = 0.03
@@ -141,6 +143,7 @@ dataloader_config = DataloaderConfig(
 optim_cfg = VisionAdamWConfig(
     vit_lr=vit_lr,
     lact_lr=lact_lr,
+    lact_gate_lr=lact_gate_lr,
     projector_lr=lr,
     lr=lr,
     weight_decay=weight_decay,

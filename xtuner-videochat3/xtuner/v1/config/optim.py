@@ -38,15 +38,27 @@ class VisionAdamWConfig(AdamWConfig):
     lact_lr: Annotated[
         Optional[float], Parameter(help="Learning rate for LACT fast-weight parameters. If None, uses `vit_lr`.")
     ] = None
+    lact_gate_lr: Annotated[
+        Optional[float],
+        Parameter(help="Learning rate for LACT memory gates. If None, gates stay in the LACT fast-weight group."),
+    ] = None
     projector_lr: Annotated[Optional[float], Parameter(help="Learning rate for Projector. If None, uses `lr`.")] = None
     llm_lr: Annotated[Optional[float], Parameter(help="Learning rate for LLM. If None, uses `lr`.")] = None
 
-    def build_with_param_groups(self, vit_params, projector_params, llm_params, lact_params=None):
+    def build_with_param_groups(
+        self,
+        vit_params,
+        projector_params,
+        llm_params,
+        lact_params=None,
+        lact_gate_params=None,
+    ):
         """Build the optimizer while preserving named learning-rate groups."""
         param_groups = []
 
         vit_lr = self.vit_lr if self.vit_lr is not None else self.lr
         lact_lr = self.lact_lr if self.lact_lr is not None else vit_lr
+        lact_gate_lr = self.lact_gate_lr if self.lact_gate_lr is not None else lact_lr
         projector_lr = self.projector_lr if self.projector_lr is not None else self.lr
         llm_lr = self.llm_lr if self.llm_lr is not None else self.lr
 
@@ -54,6 +66,8 @@ class VisionAdamWConfig(AdamWConfig):
             param_groups.append({"params": vit_params, "lr": vit_lr, "name": "vit"})
         if lact_params:
             param_groups.append({"params": lact_params, "lr": lact_lr, "name": "lact_fw"})
+        if lact_gate_params:
+            param_groups.append({"params": lact_gate_params, "lr": lact_gate_lr, "name": "lact_gate"})
         if projector_params:
             param_groups.append({"params": projector_params, "lr": projector_lr, "name": "projector"})
         if llm_params:

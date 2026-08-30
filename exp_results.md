@@ -193,3 +193,18 @@ The Base, LACT initialization, and v1-v4 checkpoints were run in BF16/FlashAtten
 | v4 | `0.999745 / 2.34%` | `0.998870 / 5.42%` | `0.999786 / 2.16%` | `0.998959 / 4.75%` |
 
 The hypothesis is strongly supported for FW-only v2/v4: their LM-facing visual tokens remain very close to Base, and Video-MME/MVBench reproduce 95.1%-97.8% of Base's exact output strings and 97.8%-98.7% of its correctness decisions. The original-ViT-trained v1/v3 move features much farther and change more outputs, but the changes are not directionally useful and still cancel in aggregate accuracy. On the three 1,024-frame videos, v2/v4 projected relative L2 only grows from `4.84%/4.65%` in the first temporal quarter to `5.28%/4.94%` in the last; there is no strong horizon-dependent divergence despite 256 recurrent clips. This points to a weak effective FW residual and weak task-aligned learning, rather than evaluation parity being caused only by too few raw videos.
+
+## v5 - VideoChat-Flash LongVid, 10x Gate LR
+
+**Status:** Prepared; launch pending.
+
+- Objective: isolate whether v4's zero-gate cold start and small effective outer update budget prevented the FW residual from opening. The only intended v4 recipe change is a 10x optimizer LR for the 31,104 memory-gate parameters.
+- Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; this is a controlled restart and does not reuse the v4 checkpoint.
+- Data: the same pinned VideoChat-Flash LongVid manifest and 5,870 QA rows used by v4, with the same deterministic `img2`, 1 FPS, 64-512-frame recipe.
+- Trainable scope: the same 358,473,600 LACT-added parameters as v4. The 31,104 memory-gate parameters form an independent optimizer group; the remaining 358,442,496 LACT parameters stay in the normal FW group. Original ViT, LM, and projector remain frozen.
+- Optimizer and schedule: non-gate FW `2e-5 -> 1e-6`; memory gate `2e-4 -> 1e-5`; both use the same 3% warmup and proportional cosine schedule, preserving an exact 10x ratio at every step. Weight decay remains 0 and training remains one epoch.
+- Stabilization: unchanged NS5 and complete state-adjoint ratio clipping at rho 1, plus true FSDP global gradient norm clipping at 1.0.
+- Hardware and packing: unchanged 8xH100, global batch 16, 8K packs, 1 FPS, 64-512 frames, four-frame LACT groups, 2,141 packed samples, and expected 134 optimizer steps.
+- Training W&B: [`v5`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-gatelr2e4-ns5r1-stgr1-v5).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FW_train_longvid_v5.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-gatelr2e4-ns5r1-stgr1-v5/<timestamp>/hf-134`.

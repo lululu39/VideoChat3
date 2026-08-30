@@ -141,26 +141,43 @@ class VisionComposeTrainEngine(TrainEngine):
     def build_optimizer(self, optim_cfg: OptimConfig) -> torch.optim.Optimizer:
         """Build optimizer groups for vision, LACT, projector, and language parameters."""
         lact_params = []
-        if isinstance(optim_cfg, VisionAdamWConfig) and optim_cfg.lact_lr is not None:
+        lact_gate_params = []
+        split_lact_params = isinstance(optim_cfg, VisionAdamWConfig) and (
+            optim_cfg.lact_lr is not None or optim_cfg.lact_gate_lr is not None
+        )
+        if split_lact_params:
             is_lact_state_key = getattr(self.model.vision_tower, "_is_lact_state_key", None)
             if is_lact_state_key is None:
-                raise TypeError("lact_lr requires a vision tower that identifies LACT state parameters")
+                raise TypeError(
+                    "lact_lr/lact_gate_lr requires a vision tower that identifies LACT state parameters"
+                )
             vit_params = []
             for name, param in self.model.vision_tower.named_parameters():
                 if not param.requires_grad:
                     continue
                 if is_lact_state_key(name):
-                    lact_params.append(param)
+                    if optim_cfg.lact_gate_lr is not None and name.endswith("memory_gate"):
+                        lact_gate_params.append(param)
+                    else:
+                        lact_params.append(param)
                 else:
                     vit_params.append(param)
-            if not lact_params:
+            if optim_cfg.lact_lr is not None and not lact_params:
                 raise ValueError("lact_lr was set, but no trainable LACT parameters were found")
+            if optim_cfg.lact_gate_lr is not None and not lact_gate_params:
+                raise ValueError("lact_gate_lr was set, but no trainable LACT memory gates were found")
         else:
             vit_params = [p for p in self.model.vision_tower.parameters() if p.requires_grad]
         projector_params = [p for p in self.model.multi_modal_projector.parameters() if p.requires_grad]
         llm_params = [p for p in self.model.language_model.parameters() if p.requires_grad]
 
-        known_param_count = len(vit_params) + len(lact_params) + len(projector_params) + len(llm_params)
+        known_param_count = (
+            len(vit_params)
+            + len(lact_params)
+            + len(lact_gate_params)
+            + len(projector_params)
+            + len(llm_params)
+        )
         all_trainable_params = [(name, p) for name, p in self.model.named_parameters() if p.requires_grad]
 
         if len(all_trainable_params) != known_param_count:
@@ -177,13 +194,15 @@ class VisionComposeTrainEngine(TrainEngine):
 
         vit_num = sum(p.numel() for p in vit_params)
         lact_num = sum(p.numel() for p in lact_params)
+        lact_gate_num = sum(p.numel() for p in lact_gate_params)
         projector_num = sum(p.numel() for p in projector_params)
         llm_num = sum(p.numel() for p in llm_params)
-        total_num = vit_num + lact_num + projector_num + llm_num
+        total_num = vit_num + lact_num + lact_gate_num + projector_num + llm_num
 
         if dist.get_rank() == 0:
             logger.info(f"Trainable parameters - ViT: {vit_num // 1e6:.1f}M, "
                        f"LACT FW: {lact_num // 1e6:.1f}M, "
+                       f"LACT Gate: {lact_gate_num / 1e6:.3f}M, "
                        f"Projector: {projector_num // 1e6:.1f}M, LLM: {llm_num // 1e6:.1f}M, "
                        f"Total: {total_num // 1e6:.1f}M")
 
@@ -191,10 +210,11 @@ class VisionComposeTrainEngine(TrainEngine):
             if dist.get_rank() == 0:
                 vit_lr = optim_cfg.vit_lr if optim_cfg.vit_lr is not None else optim_cfg.lr
                 lact_lr = optim_cfg.lact_lr if optim_cfg.lact_lr is not None else vit_lr
+                lact_gate_lr = optim_cfg.lact_gate_lr if optim_cfg.lact_gate_lr is not None else lact_lr
                 proj_lr = optim_cfg.projector_lr if optim_cfg.projector_lr is not None else optim_cfg.lr
                 llm_lr = optim_cfg.llm_lr if optim_cfg.llm_lr is not None else optim_cfg.lr
                 logger.info(
-                    f"Learning rates - ViT: {vit_lr}, LACT FW: {lact_lr}, "
+                    f"Learning rates - ViT: {vit_lr}, LACT FW: {lact_lr}, LACT Gate: {lact_gate_lr}, "
                     f"Projector: {proj_lr}, LLM: {llm_lr}"
                 )
             return optim_cfg.build_with_param_groups(
@@ -202,9 +222,10 @@ class VisionComposeTrainEngine(TrainEngine):
                 projector_params,
                 llm_params,
                 lact_params=lact_params,
+                lact_gate_params=lact_gate_params,
             )
         else:
-            all_params = vit_params + lact_params + projector_params + llm_params
+            all_params = vit_params + lact_params + lact_gate_params + projector_params + llm_params
             return optim_cfg.build(all_params)
 
     def from_hf(self, hf_path: str | Path, strict: bool = False):
