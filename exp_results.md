@@ -88,7 +88,7 @@ Conclusion: v2 moved the FW parameters far more than v1 and avoided almost all g
 
 ## v3 - Lightweight, Split ViT/FW Learning Rates
 
-**Status:** Running.
+**Status:** Training completed; core evaluation pending.
 
 - Objective: isolate the two variables confounded between v1 and v2. Compared with v1, only the FW LR is higher; compared with v2, only the original ViT is unfrozen at the v1 LR.
 - Data and initialization: identical to v1/v2, using the 17-annotation / 30,966-reference lightweight manifest and `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`.
@@ -98,4 +98,31 @@ Conclusion: v2 moved the FW parameters far more than v1 and avoided almost all g
 - Stabilization: unchanged from v1/v2, with rho-1 NS5/state-gradient ratio clipping and framework global grad norm 1.
 - Training W&B: [`v3`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-fw4-ve-s3-lite31k-8xh100-gb16-f3600-s8k-vitlr2p5e6-fwlr2e5-ns5r1-stgr1-v3).
 - Startup validation: FSDP retained disjoint `416.0M` original-ViT and `358.0M` LACT-FW groups. Warmup logs preserve the exact 8:1 LR ratio; first-four-step grad norms were `13.24/13.23/6.88/10.02`, peak allocated memory was 47.3GB, and no OOM or optimizer-group error occurred.
-- Checkpoint and evaluation: pending completion.
+- Checkpoint: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-ve-s3-lite31k-8xh100-gb16-f3600-s8k-vitlr2p5e6-fwlr2e5-ns5r1-stgr1-v3/20260829215844/hf-208`.
+
+### Checkpoint Diagnostics
+
+| Parameter group | Result vs initialization | Relative to v2 movement |
+|---|---:|---:|
+| Memory gate RMS | `2.02e-4` | 41.7% |
+| FW base relative L2 delta | `1.89e-3` | 24.0% |
+| FW private projections relative L2 delta | `5.48e-3` | 40.6% |
+| FW value projection relative L2 delta | `2.99e-3` | 31.7% |
+| FW LR projection relative L2 delta | `8.49e-4` | 44.3% |
+| FW memory norm | Bitwise unchanged | unchanged |
+| Original attention relative L2 delta | `7.46e-4` | trained; approximately v1 |
+| Original MLP relative L2 delta | `3.39e-4` | trained; approximately v1 |
+| LM / projector | Bitwise unchanged | expected |
+
+All 208 steps exceeded global grad norm 1. The median was `5.31`, mean `11.51`, and step 186 spiked to `1085.80`; without that spike the mean was `6.32`. Mean loss changed from `0.633` over the first 26 steps to `0.608` over the last 26. Raising the FW LR materially increased FW movement over v1, but joint global clipping with the unfrozen ViT left only 24%-44% of v2's FW movement.
+
+### Core Evaluation
+
+| Benchmark | Base | v3 | Delta |
+|---|---:|---:|---:|
+| Video-MME Short | 80.70 | Pending | Pending |
+| Video-MME Long | 60.30 | Pending | Pending |
+| MVBench MP4 64-frame | 70.83 | Pending | Pending |
+| MMBench DEV EN V1.1 | 35.91 | Pending | Pending |
+
+Native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-lact-v3-core`.
