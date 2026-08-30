@@ -196,7 +196,7 @@ The hypothesis is strongly supported for FW-only v2/v4: their LM-facing visual t
 
 ## v5 - VideoChat-Flash LongVid, 10x Gate LR
 
-**Status:** Running.
+**Status:** Stopped at step 33; diagnostic-only, with no checkpoint or evaluation.
 
 - Objective: isolate whether v4's zero-gate cold start and small effective outer update budget prevented the FW residual from opening. The only intended v4 recipe change is a 10x optimizer LR for the 31,104 memory-gate parameters.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; this is a controlled restart and does not reuse the v4 checkpoint.
@@ -210,3 +210,20 @@ The hypothesis is strongly supported for FW-only v2/v4: their LM-facing visual t
 - Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-gatelr2e4-ns5r1-stgr1-v5/20260830191314`.
 - Startup validation: FSDP retained 358,442,496 non-gate LACT parameters at `2e-5` and exactly 31,104 memory-gate parameters at `2e-4`; all other model parameters remain frozen. Public W&B authenticated as `yibozhong657 (LVSM-Experiment)`. Step 1 matched v4's first batch with global CE `2.79301167`, pre-clip grad norm `3.0679`, rank-0 peak memory `45.75 GB`, no NaN/OOM, and an initial ETA of about 9h03m. Step 2 confirmed the live warmup scheduler at `lact_fw=5e-6` and `lact_gate=5e-5`, preserving the exact 10x ratio; global CE was `2.96465445` and pre-clip grad norm was `1.6892`.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-gatelr2e4-ns5r1-stgr1-v5/20260830191314/hf-134`.
+
+The user stopped v5 after step 33 because the paired loss remained extremely close to v4. Through step 31, v4/v5 mean global CE was `2.83995/2.83817`; only the first two steps were exactly equal, but the mean difference was just `-0.00177`. The run was stopped cleanly, its eight GPUs were released, and its W&B state was marked failed. It must not be resumed or evaluated.
+
+## v6 - VideoChat-Flash LongVid, Random Gate Initialization
+
+**Status:** Prepared; launch pending.
+
+- Objective: give the FW residual direct control over the initial ViT output while changing only gate initialization. All optimizer and data settings return exactly to v4; v5's gate-specific LR is not used.
+- Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-random-gate-init`, derived from the retained zero-gate LACT init with seed 42. Its 27 memory gates use PyTorch `nn.Linear`'s default fan-in uniform distribution, `U(-1/sqrt(1152), 1/sqrt(1152))`; gate RMS is `0.01694`, range is `[-0.02942, 0.02917]`, and all non-gate tensors are bitwise unchanged.
+- Initial functional effect: across the fixed three-short/three-long Video-MME probe, post-ViT relative L2 is approximately `6.3%` and LM-facing projected-token relative L2 is approximately `14%-15%` versus Base. The same probe loaded and ran without numerical errors.
+- Data: the same pinned VideoChat-Flash LongVid manifest, 5,870 QA rows, deterministic `img2`, 1 FPS, and 64-512-frame recipe as v4/v5.
+- Trainable scope: the same 358,473,600 LACT-added parameters as v4, in one uniform optimizer group. Original ViT, LM, and projector remain frozen.
+- Optimizer and schedule: all LACT parameters, including gate, use the v4 outer LR `2e-5 -> 1e-6`, 3% warmup, cosine decay, weight decay 0, and one epoch. There is no gate-specific optimizer group.
+- Stabilization, hardware, and packing: unchanged rho-1 NS5/state-adjoint clipping, FSDP global clip 1.0, 8xH100, global batch 16, 8K packs, 1 FPS, 64-512 frames, 2,141 packed samples, and expected 134 optimizer steps.
+- Training W&B: [`v6`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-seed42-ns5r1-stgr1-v6).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FW_train_longvid_v6.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-seed42-ns5r1-stgr1-v6/<timestamp>/hf-134`.

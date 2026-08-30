@@ -19,7 +19,12 @@ run_name = os.getenv(
     "WANDB_NAME",
     "vc3-4b-lact-fw4-ve-s3-full89k-8xh100-gb16-f3600-s8k-vitlr2p5e6-ns5r1-stgr1-v1",
 )
-model_path = Path("/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init")
+model_path = Path(
+    os.getenv(
+        "VIDEOCHAT3_MODEL_PATH",
+        "/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init",
+    )
+)
 metadata_path = Path(
     os.getenv(
         "VIDEOCHAT3_STAGE3_METADATA_PATH",
