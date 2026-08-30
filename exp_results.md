@@ -138,7 +138,7 @@ Conclusion: v3 produced the first positive Video-MME Long delta, but `+0.30` is 
 
 ## v4 - VideoChat-Flash LongVid, FW Only
 
-**Status:** Running.
+**Status:** Training complete; core evaluation pending.
 
 - Objective: test whether explicit long-video event understanding, event relationship, and event counting supervision can open and train the LACT memory path where the retired lightweight Stage 3 mixture did not.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; no v1-v3 checkpoint reuse.
@@ -148,6 +148,21 @@ Conclusion: v3 produced the first positive Video-MME Long delta, but `+0.30` is 
 - Stabilization: `clip_ns_grad_ratio=True`, `clip_state_grad_ratio=True`, both at rho 1, plus the framework's true FSDP global gradient norm clip at 1.0.
 - Hardware and packing: 8xH100, global batch 16, 8K sample/pack length, 1 FPS, 64-512 frames, four-frame LACT groups, and at most 127 effective FW updates per video. Startup packed 5,870 source rows into 2,141 samples for 134 optimizer steps.
 - Training W&B: [`v4`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-ns5r1-stgr1-v4).
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-ns5r1-stgr1-v4/<timestamp>/hf-<final_step>`.
 - Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-ns5r1-stgr1-v4/20260830064443`.
 - Startup validation: all four datasets loaded, FSDP retained exactly 358.5M LACT-only trainable parameters, and public W&B authenticated as `yibozhong657 (LVSM-Experiment)`. Step 1 completed in 255.35 seconds with global calibrated CE (`total_loss` / `reduced_llm_loss`) `2.79301`, rank-0 pre-all-reduce diagnostic `loss` `0.31798`, pre-clip grad norm `3.072`, max allocated memory `45.75 GB`, and no NaN/OOM; the initial ETA was about 9h26m.
+- Final checkpoint: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-ns5r1-stgr1-v4/20260830064443/hf-134`.
+
+### Checkpoint Diagnostics
+
+| Parameter group | Result vs initialization |
+|---|---:|
+| Memory gate RMS / mean abs / max abs | `2.64e-4` / `1.87e-4` / `1.34e-3` |
+| FW base relative L2 delta | `3.51e-3` |
+| FW private projections relative L2 delta | `9.29e-3` |
+| FW value projection relative L2 delta | `7.03e-3` |
+| FW LR projection relative L2 delta | `1.11e-3` |
+| FW memory norm | Bitwise unchanged |
+| Original attention / MLP / other vision | Bitwise unchanged |
+| LM / projector | Bitwise unchanged |
+
+Training completed all 134 steps in 30,040.99 seconds (8h20m41s). The first/last 26-step global CE means were `2.82099/2.83446`, so training loss was effectively flat across the heterogeneous one-pass data. Pre-clip grad norm had mean `2.216`, median `1.760`, maximum `22.141` at step 126, and exceeded 1 on 131/134 steps; all values remained finite and the global clip handled the spikes. Mean step time was 222.78 seconds, maximum allocated memory was 56.64 GB, and the final LR was `1.003e-6`.
