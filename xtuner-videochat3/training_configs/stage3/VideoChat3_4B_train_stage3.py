@@ -66,6 +66,8 @@ for name, _data in ds_collections.items():
                     video_max_frames=_data.get('video_max_frames', 3600), 
                     fixed_num_sampled_frames=_data.get('fixed_num_sampled_frames', None),
                     video_sample_fps=_data.get('video_sample_fps', 2), 
+                    video_read_type=_data.get('video_read_type', None),
+                    video_frame_multiple=_data.get('video_frame_multiple', 1),
                     processor_path=model_path,
                     data_augment=_data.get('data_augment', False),
                     system_message=_data.get('system_message', None),

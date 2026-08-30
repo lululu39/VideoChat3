@@ -119,6 +119,8 @@ for name, data in dataset_collections.items():
                 ),
                 fixed_num_sampled_frames=data.get("fixed_num_sampled_frames"),
                 video_sample_fps=data.get("video_sample_fps", 2),
+                video_read_type=data.get("video_read_type"),
+                video_frame_multiple=data.get("video_frame_multiple", 1),
                 processor_path=str(model_path),
                 data_augment=data.get("data_augment", False),
                 system_message=data.get("system_message"),

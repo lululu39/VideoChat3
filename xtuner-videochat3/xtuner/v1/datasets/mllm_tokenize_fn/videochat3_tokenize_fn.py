@@ -61,10 +61,57 @@ def smart_video_resize(
 
     return h_bar, w_bar
 
-def smart_get_video_thw(video_meta: VideoChat3VideoMetadata, video_processor):
-    num_sampled_frames = video_processor.get_num_sampled_frames(video_meta, num_frames=video_processor.num_frames, fps=video_processor.fps)
-    
-    assert num_sampled_frames != 0, f"num_sampled_frames must be greater than 0, video_meta: {video_meta}"
+def get_video_frame_sample_indices(
+    video_meta: VideoChat3VideoMetadata,
+    video_processor,
+    frame_multiple: int = 1,
+):
+    """Return the indices used by both cache estimation and runtime loading.
+
+    ``frame_multiple`` keeps frame-directory recipes such as VideoChat-Flash
+    LongVid aligned with their local temporal window. LongVid treats extracted
+    JPG directories as 1 FPS videos and rounds the sampled sequence down to a
+    multiple of four before uniformly sampling it.
+    """
+    if frame_multiple < 1:
+        raise ValueError(f"frame_multiple must be positive, got {frame_multiple}")
+
+    num_sampled_frames = video_processor.get_num_sampled_frames(
+        video_meta,
+        num_frames=video_processor.num_frames,
+        fps=video_processor.fps,
+    )
+    num_sampled_frames = num_sampled_frames // frame_multiple * frame_multiple
+    if num_sampled_frames == 0:
+        raise ValueError(
+            "num_sampled_frames must be greater than 0 after rounding, "
+            f"frame_multiple={frame_multiple}, video_meta={video_meta}"
+        )
+
+    if video_meta.clip_start_time is not None and video_meta.clip_end_time is not None:
+        start_idx = int(video_meta.clip_start_time * video_meta.fps)
+        end_idx = min(
+            int(video_meta.clip_end_time * video_meta.fps),
+            video_meta.total_num_frames - 1,
+        )
+    else:
+        start_idx = 0
+        end_idx = video_meta.total_num_frames - 1
+    return np.linspace(start_idx, end_idx, num_sampled_frames).round().astype(int)
+
+
+def smart_get_video_thw(
+    video_meta: VideoChat3VideoMetadata,
+    video_processor,
+    frame_multiple: int = 1,
+):
+    frame_sample_indices = get_video_frame_sample_indices(
+        video_meta,
+        video_processor,
+        frame_multiple=frame_multiple,
+    )
+    num_sampled_frames = len(frame_sample_indices)
+    video_meta.frames_indices = frame_sample_indices
     
     if video_meta.specified_wh is not None:
         resized_width, resized_height = video_meta.specified_wh
@@ -79,11 +126,6 @@ def smart_get_video_thw(video_meta: VideoChat3VideoMetadata, video_processor):
             frame_max_pixels=video_processor.size["longest_edge"],
             video_max_total_pixels=video_processor.video_max_total_pixels,
         )
-
-    if video_meta.clip_start_time is not None and video_meta.clip_end_time is not None:
-        video_meta.frames_indices = np.linspace(video_meta.clip_start_time * video_meta.fps, video_meta.clip_end_time * video_meta.fps, num_sampled_frames).round().astype(int)
-    else:
-        video_meta.frames_indices = np.linspace(0, video_meta.total_num_frames - 1, num_sampled_frames).round().astype(int)
 
     grid_t = num_sampled_frames
     grid_h, grid_w = resized_height // video_processor.patch_size, resized_width // video_processor.patch_size
@@ -180,6 +222,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
         fixed_num_sampled_frames: int | None = None,
         video_sample_fps: Union[int, float] = 2,  # Sample fps for video
         video_read_type: str | None = None,
+        video_frame_multiple: int = 1,
         system_message: str | None = None,
         add_vision_id: bool = False,
         max_length: int | None = None,
@@ -209,6 +252,11 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
         self.video_processor.num_frames = fixed_num_sampled_frames
         self.video_processor.fps = video_sample_fps
         self.video_read_type = video_read_type
+        if video_frame_multiple < 1:
+            raise ValueError(
+                f"video_frame_multiple must be positive, got {video_frame_multiple}"
+            )
+        self.video_frame_multiple = video_frame_multiple
 
         self.add_vision_id = add_vision_id
     
@@ -220,7 +268,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             f"[{self.data_name}] image_min_pixels: {self.image_processor.min_pixels}, image_max_pixels: {self.image_processor.max_pixels},"
             f"video_max_total_pixels: {self.video_max_total_pixels}, frame_min_pixels: {frame_min_pixels}, frame_max_pixels: {frame_max_pixels},"
             f"video_min_frames: {video_min_frames}, video_max_frames: {video_max_frames}, fixed_num_sampled_frames: {fixed_num_sampled_frames}, video_sample_fps: {video_sample_fps},"
-            f"video_read_type: {self.video_read_type}, add_vision_id: {self.add_vision_id}, "
+            f"video_read_type: {self.video_read_type}, video_frame_multiple: {self.video_frame_multiple}, add_vision_id: {self.add_vision_id}, "
             f"spatial_merge_length: {self.spatial_merge_length}, temporal_merge_length: {self.temporal_merge_length}"
         )
 
@@ -243,6 +291,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             f"{fixed_num_sampled_frames}_"
             f"{video_sample_fps}_"
             f"{self.video_read_type}_"
+            f"{self.video_frame_multiple}_"
             f"{self.add_vision_id}_"
             f"{self.spatial_merge_length}_"
             f"{self.temporal_merge_length}_"
@@ -360,7 +409,11 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
         # 因此我们只需要考虑读取ceph的操作怎么和video_processing_videochat3._decode_and_sample_videos配合,
         # 最方便的办法就是我们在外面decode加采帧，直接给一个PIL.Image list进去然后do_sample_frames设为False即可
         
-        frame_sample_indices = processor.sample_frames(metadata=video_meta, num_frames=processor.num_frames, fps=processor.fps)
+        frame_sample_indices = get_video_frame_sample_indices(
+            video_meta,
+            processor,
+            frame_multiple=self.video_frame_multiple,
+        )
         video_meta.frames_indices = frame_sample_indices
         frames = self._my_load_video(video_path, video_meta, frame_sample_indices)
         
@@ -583,7 +636,11 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
         media_grid_thw = []
         num_video_tokens_list = []
         for video_meta in self._video_meta_list:
-            grid_t, grid_h, grid_w = smart_get_video_thw(video_meta, self.video_processor)
+            grid_t, grid_h, grid_w = smart_get_video_thw(
+                video_meta,
+                self.video_processor,
+                frame_multiple=self.video_frame_multiple,
+            )
             media_grid_thw.append([grid_t, grid_h, grid_w])
             num_video_tokens_list.append(self.video_processor.get_number_of_video_tokens(grid_t, grid_h, grid_w))
         media_grid_thw = torch.tensor(media_grid_thw, dtype=torch.int).reshape(-1, 3)  # type: ignore
@@ -675,6 +732,7 @@ class VideoChat3TokenizeFnConfig(BaseMLLMTokenizeFnConfig):
     fixed_num_sampled_frames: int | None = None
     video_sample_fps: Union[int, float] = 2 
     video_read_type: str | None = None
+    video_frame_multiple: int = 1
     # When handling multiple images, it's helpful to add labels to the images and videos for better reference.
     add_vision_id: bool = False
 
@@ -694,6 +752,7 @@ class VideoChat3TokenizeFnConfig(BaseMLLMTokenizeFnConfig):
             fixed_num_sampled_frames=self.fixed_num_sampled_frames,
             video_sample_fps=self.video_sample_fps,
             video_read_type=self.video_read_type,
+            video_frame_multiple=self.video_frame_multiple,
             video_max_total_pixels=self.video_max_total_pixels,
             add_vision_id=self.add_vision_id,
             max_length=self.max_length,

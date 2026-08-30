@@ -32,6 +32,12 @@
 - On 2026-08-30, `/mnt/localssd/dataset/VideoChat3/VideoChat3-Stage3-Training-Data` (543G) and `/mnt/localssd/dataset/VideoChat3/VideoChat3-Training-Data-Annotations` (359M) were deleted, increasing `/mnt/localssd` free space from 381G to 926G. Do not redownload or use them unless the user explicitly reverses this decision.
 - Historical scripts, configs, checkpoints, logs, and evaluation artifacts remain for audit; future LACT training data must be independently sourced and curated for questions that actually require persistent cross-window state.
 
+## VideoChat-Flash LongVid Data
+
+- The independently sourced VideoChat-Flash LongVid subset is pinned at revision `be87f5516a709be079cec8b727dd2287bf2dd70f` under `/mnt/localssd/dataset/VideoChat3/VideoChat-Flash-Training-Data`. Four QA sources provide 5,870 rows over 5,478 per-dataset unique videos, with all released media references present.
+- Media is released as zero-padded JPG frame directories. The official VideoChat-Flash Stage 3 recipe treats these directories as 1 FPS, samples 64-512 frames uniformly, and rounds down to a multiple of four. Use `img2` locally for deterministic lexical ordering.
+- `scripts/prepare_videochat_flash_longvid.py` validates and converts the data; the generated manifest is `/mnt/localssd/dataset/VideoChat3/VideoChat-Flash-Training-Data/VideoChatFlash_LongVid_VideoChat3.json`. The LongVid launcher requires an explicit `WANDB_NAME` after the numbered experiment is recorded.
+
 ## VideoChat3 Model
 
 - `VideoChat3ForConditionalGeneration` is `I3D-ViT -> patch merger -> multimodal projector -> Qwen3 LM`. Projected visual features replace image/video placeholder embeddings before the LM forward.

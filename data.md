@@ -42,3 +42,13 @@ The most practical first mixture under the current 926 GB free-space budget is:
 4. Optionally add the roughly 16 GB Oryx MovieNet long-form set for long-distance retrieval pressure.
 
 This follows the successful short-to-long recipe used by VideoChat3 and VideoChat-Flash while keeping the data visual, influential, and small enough to audit before training.
+
+## Prepared VideoChat-Flash LongVid Subset
+
+The first candidate is prepared locally at `/mnt/localssd/dataset/VideoChat3/VideoChat-Flash-Training-Data`, pinned to source revision `be87f5516a709be079cec8b727dd2287bf2dd70f`.
+
+- Four released QA files contain 5,870 rows over 5,478 per-dataset unique videos; every media reference resolves to a non-empty frame directory.
+- The released media is an extracted JPG sequence. The official VideoChat-Flash Stage 3 recipe reads it as `img`, treats non-TVQA frame directories as 1 FPS, samples 64-512 frames, and rounds the sampled length down to a multiple of four.
+- `scripts/prepare_videochat_flash_longvid.py` validates the source, converts it to VideoChat3 JSONL, and writes `VideoChatFlash_LongVid_VideoChat3.json`.
+- The generated manifest selects `img2`, 1 FPS, 64-512 frames, and `video_frame_multiple=4`. VideoChat3 uses lexicographic ordering for the released zero-padded names such as `00001.jpg`.
+- The explicit launcher is `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_VE_train_longvid.sh`. It requires `WANDB_NAME` so a numbered experiment must be recorded before training starts.
