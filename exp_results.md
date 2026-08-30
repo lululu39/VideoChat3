@@ -138,7 +138,7 @@ Conclusion: v3 produced the first positive Video-MME Long delta, but `+0.30` is 
 
 ## v4 - VideoChat-Flash LongVid, FW Only
 
-**Status:** Training complete; core evaluation pending.
+**Status:** Completed. Usable checkpoint, Base-parity result without a meaningful long-video gain.
 
 - Objective: test whether explicit long-video event understanding, event relationship, and event counting supervision can open and train the LACT memory path where the retired lightweight Stage 3 mixture did not.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; no v1-v3 checkpoint reuse.
@@ -166,3 +166,16 @@ Conclusion: v3 produced the first positive Video-MME Long delta, but `+0.30` is 
 | LM / projector | Bitwise unchanged |
 
 Training completed all 134 steps in 30,040.99 seconds (8h20m41s). The first/last 26-step global CE means were `2.82099/2.83446`, so training loss was effectively flat across the heterogeneous one-pass data. Pre-clip grad norm had mean `2.216`, median `1.760`, maximum `22.141` at step 126, and exceeded 1 on 131/134 steps; all values remained finite and the global clip handled the spikes. Mean step time was 222.78 seconds, maximum allocated memory was 56.64 GB, and the final LR was `1.003e-6`.
+
+### Core Evaluation
+
+Native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-lact-v4-core/VideoChat3-4B-LACT-v4/T20260830_Gc987fe11`.
+
+| Benchmark | Base | v4 | Delta |
+|---|---:|---:|---:|
+| Video-MME Short | 80.70 | 80.90 | +0.20 |
+| Video-MME Long | 60.30 | 60.40 | +0.10 |
+| MVBench MP4 64-frame | 70.83 | 70.83 | +0.00 |
+| MMBench DEV EN V1.1 | 35.91 | 35.60 | -0.31 |
+
+Conclusion: v4 preserves the Base model but does not produce a meaningful long-video gain. Relative to v2 it recovers `+0.30` on Video-MME Long while keeping the same Short score, but both remain effectively at Base parity. The LongVid supervision opened the memory gate less than v2 and moved every FW subgroup less, while the one-pass global CE stayed flat; do not add a second epoch without a new controlled hypothesis or a data-specific held-out evaluation.
