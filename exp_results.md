@@ -88,7 +88,7 @@ Conclusion: v2 moved the FW parameters far more than v1 and avoided almost all g
 
 ## v3 - Lightweight, Split ViT/FW Learning Rates
 
-**Status:** Training completed; core evaluation pending.
+**Status:** Completed. Usable checkpoint, mixed/negative research result.
 
 - Objective: isolate the two variables confounded between v1 and v2. Compared with v1, only the FW LR is higher; compared with v2, only the original ViT is unfrozen at the v1 LR.
 - Data and initialization: identical to v1/v2, using the 17-annotation / 30,966-reference lightweight manifest and `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`.
@@ -120,9 +120,11 @@ All 208 steps exceeded global grad norm 1. The median was `5.31`, mean `11.51`, 
 
 | Benchmark | Base | v3 | Delta |
 |---|---:|---:|---:|
-| Video-MME Short | 80.70 | Pending | Pending |
-| Video-MME Long | 60.30 | Pending | Pending |
-| MVBench MP4 64-frame | 70.83 | Pending | Pending |
-| MMBench DEV EN V1.1 | 35.91 | Pending | Pending |
+| Video-MME Short | 80.70 | 79.40 | -1.30 |
+| Video-MME Long | 60.30 | 60.60 | +0.30 |
+| MVBench MP4 64-frame | 70.83 | 70.88 | +0.05 |
+| MMBench DEV EN V1.1 | 35.91 | 35.53 | -0.39 |
 
 Native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-lact-v3-core`.
+
+Conclusion: v3 produced the first positive Video-MME Long delta, but `+0.30` is only a small change and came with a `-1.30` Short regression; MVBench stayed at parity and MMBench remained below Base. Compared with v2, unfreezing the original ViT moved it approximately as much as v1 while shared global clipping reduced FW movement to 24%-44% of v2. This split-LR recipe therefore does not show a stable overall gain and suggests that joint global clipping lets the original ViT compete with, rather than effectively co-adapt with, the FW branch.
