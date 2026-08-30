@@ -215,7 +215,7 @@ The user stopped v5 after step 33 because the paired loss remained extremely clo
 
 ## v6 - VideoChat-Flash LongVid, Random Gate Initialization
 
-**Status:** Prepared; launch pending.
+**Status:** Running.
 
 - Objective: give the FW residual direct control over the initial ViT output while changing only gate initialization. All optimizer and data settings return exactly to v4; v5's gate-specific LR is not used.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-random-gate-init`, derived from the retained zero-gate LACT init with seed 42. Its 27 memory gates use PyTorch `nn.Linear`'s default fan-in uniform distribution, `U(-1/sqrt(1152), 1/sqrt(1152))`; gate RMS is `0.01694`, range is `[-0.02942, 0.02917]`, and all non-gate tensors are bitwise unchanged.
@@ -226,4 +226,6 @@ The user stopped v5 after step 33 because the paired loss remained extremely clo
 - Stabilization, hardware, and packing: unchanged rho-1 NS5/state-adjoint clipping, FSDP global clip 1.0, 8xH100, global batch 16, 8K packs, 1 FPS, 64-512 frames, 2,141 packed samples, and expected 134 optimizer steps.
 - Training W&B: [`v6`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-seed42-ns5r1-stgr1-v6).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FW_train_longvid_v6.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-seed42-ns5r1-stgr1-v6/<timestamp>/hf-134`.
+- Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-seed42-ns5r1-stgr1-v6/20260830212914`.
+- Startup validation: FSDP placed all 358,473,600 LACT parameters, including the random gates, in one uniform `2e-5` optimizer group; original ViT, LM, and projector stayed frozen. Public W&B authenticated as `yibozhong657 (LVSM-Experiment)`. On the same first batch as v4, step 1 global CE was `2.80014372` versus v4's `2.79301167`, proving an immediate functional change; pre-clip grad norm was a finite `3.9165` versus v4's `3.0724`, rank-0 peak memory stayed exactly `45.75 GB`, and no NaN/OOM occurred.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-seed42-ns5r1-stgr1-v6/20260830212914/hf-134`.
