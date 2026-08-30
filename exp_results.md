@@ -179,3 +179,17 @@ Native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-lact-v4-core/VideoCh
 | MMBench DEV EN V1.1 | 35.91 | 35.60 | -0.31 |
 
 Conclusion: v4 preserves the Base model but does not produce a meaningful long-video gain. Relative to v2 it recovers `+0.30` on Video-MME Long while keeping the same Short score, but both remain effectively at Base parity. The LongVid supervision opened the memory gate less than v2 and moved every FW subgroup less, while the one-pass global CE stayed flat; do not add a second epoch without a new controlled hypothesis or a data-specific held-out evaluation.
+
+## Cross-Version Visual-Token Similarity
+
+The Base, LACT initialization, and v1-v4 checkpoints were run in BF16/FlashAttention on identical cached Video-MME frames: three short videos with 148, 172, and 226 frames and three long videos with 1,024 frames each, all at a `24x40` patch grid. `scripts/compare_videochat3_lact_features.py` compares aligned post-ViT/patch-merger tokens and the projected tokens actually inserted into the LM. Values below are unweighted means across the three videos in each duration group; relative L2 is `||variant - Base|| / ||Base||`. Native inputs, Base references, per-sample metrics, and the consolidated result are under `/mnt/localssd/VideoChat3/feature_similarity/base_v1_v4`.
+
+| Model | Short ViT cosine / rel-L2 | Short projected cosine / rel-L2 | Long ViT cosine / rel-L2 | Long projected cosine / rel-L2 |
+|---|---:|---:|---:|---:|
+| LACT init | `1.000000 / 0.00%` | `1.000000 / 0.00%` | `1.000000 / 0.00%` | `1.000000 / 0.00%` |
+| v1 | `0.994671 / 10.49%` | `0.980710 / 27.51%` | `0.995369 / 9.96%` | `0.980676 / 24.84%` |
+| v2 | `0.999733 / 2.38%` | `0.998843 / 5.48%` | `0.999766 / 2.26%` | `0.998879 / 4.92%` |
+| v3 | `0.994687 / 10.46%` | `0.980751 / 28.49%` | `0.995228 / 10.10%` | `0.980199 / 25.89%` |
+| v4 | `0.999745 / 2.34%` | `0.998870 / 5.42%` | `0.999786 / 2.16%` | `0.998959 / 4.75%` |
+
+The hypothesis is strongly supported for FW-only v2/v4: their LM-facing visual tokens remain very close to Base, and Video-MME/MVBench reproduce 95.1%-97.8% of Base's exact output strings and 97.8%-98.7% of its correctness decisions. The original-ViT-trained v1/v3 move features much farther and change more outputs, but the changes are not directionally useful and still cancel in aggregate accuracy. On the three 1,024-frame videos, v2/v4 projected relative L2 only grows from `4.84%/4.65%` in the first temporal quarter to `5.28%/4.94%` in the last; there is no strong horizon-dependent divergence despite 256 recurrent clips. This points to a weak effective FW residual and weak task-aligned learning, rather than evaluation parity being caused only by too few raw videos.
