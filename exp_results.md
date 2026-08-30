@@ -196,7 +196,7 @@ The hypothesis is strongly supported for FW-only v2/v4: their LM-facing visual t
 
 ## v5 - VideoChat-Flash LongVid, 10x Gate LR
 
-**Status:** Prepared; launch pending.
+**Status:** Running.
 
 - Objective: isolate whether v4's zero-gate cold start and small effective outer update budget prevented the FW residual from opening. The only intended v4 recipe change is a 10x optimizer LR for the 31,104 memory-gate parameters.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; this is a controlled restart and does not reuse the v4 checkpoint.
@@ -207,4 +207,6 @@ The hypothesis is strongly supported for FW-only v2/v4: their LM-facing visual t
 - Hardware and packing: unchanged 8xH100, global batch 16, 8K packs, 1 FPS, 64-512 frames, four-frame LACT groups, 2,141 packed samples, and expected 134 optimizer steps.
 - Training W&B: [`v5`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-gatelr2e4-ns5r1-stgr1-v5).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FW_train_longvid_v5.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-gatelr2e4-ns5r1-stgr1-v5/<timestamp>/hf-134`.
+- Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-gatelr2e4-ns5r1-stgr1-v5/20260830191314`.
+- Startup validation: FSDP retained 358,442,496 non-gate LACT parameters at `2e-5` and exactly 31,104 memory-gate parameters at `2e-4`; all other model parameters remain frozen. Public W&B authenticated as `yibozhong657 (LVSM-Experiment)`. Step 1 matched v4's first batch with global CE `2.79301167`, pre-clip grad norm `3.0679`, rank-0 peak memory `45.75 GB`, no NaN/OOM, and an initial ETA of about 9h03m. Step 2 confirmed the live warmup scheduler at `lact_fw=5e-6` and `lact_gate=5e-5`, preserving the exact 10x ratio; global CE was `2.96465445` and pre-clip grad norm was `1.6892`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-gatelr2e4-ns5r1-stgr1-v5/20260830191314/hf-134`.
