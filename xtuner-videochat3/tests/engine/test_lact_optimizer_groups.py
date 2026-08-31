@@ -95,6 +95,34 @@ def test_lact_memory_gate_can_use_a_separate_lr_group():
     assert grouped_ids[-1] == {id(engine.model.vision_tower.memory_gate)}
 
 
+def test_frozen_memory_gate_is_excluded_from_uniform_vision_group():
+    engine = object.__new__(VisionComposeTrainEngine)
+    engine.model = FakeComposeModel()
+    engine.model.vision_tower.memory_gate.requires_grad_(False)
+    config = VisionAdamWConfig(
+        lr=2e-5,
+        vit_lr=2e-5,
+        weight_decay=0,
+        foreach=False,
+    )
+
+    with patch("torch.distributed.get_rank", return_value=0):
+        optimizer = engine.build_optimizer(config)
+
+    assert [group["name"] for group in optimizer.param_groups] == ["vit"]
+    optimizer_ids = {
+        id(parameter)
+        for parameter in optimizer.param_groups[0]["params"]
+    }
+    expected_ids = {
+        id(parameter)
+        for parameter in engine.model.vision_tower.parameters()
+        if parameter.requires_grad
+    }
+    assert optimizer_ids == expected_ids
+    assert id(engine.model.vision_tower.memory_gate) not in optimizer_ids
+
+
 def test_group_relative_cosine_schedule_preserves_lr_ratio_and_floors():
     vit = nn.Parameter(torch.zeros(1))
     lact = nn.Parameter(torch.zeros(1))

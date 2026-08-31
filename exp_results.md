@@ -229,3 +229,17 @@ The user stopped v5 after step 33 because the paired loss remained extremely clo
 - Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-seed42-ns5r1-stgr1-v6/20260830212914`.
 - Startup validation: FSDP placed all 358,473,600 LACT parameters, including the random gates, in one uniform `2e-5` optimizer group; original ViT, LM, and projector stayed frozen. Public W&B authenticated as `yibozhong657 (LVSM-Experiment)`. On the same first batch as v4, step 1 global CE was `2.80014372` versus v4's `2.79301167`, proving an immediate functional change; pre-clip grad norm was a finite `3.9165` versus v4's `3.0724`, rank-0 peak memory stayed exactly `45.75 GB`, and no NaN/OOM occurred.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-seed42-ns5r1-stgr1-v6/20260830212914/hf-134`.
+
+## v7 - VideoChat-Flash LongVid, Frozen Random Gate
+
+**Status:** Prepared; launch intentionally waits for v6 training, inspect, and core evaluation.
+
+- Objective: prevent the optimization from reducing FW control by closing the gate. This is a single-variable comparison against v6: the identical nonzero random gates participate in every forward but remain frozen.
+- Initialization: the same seed-42 `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-random-gate-init` used by v6. All 31,104 gate values remain fixed at RMS `0.01694`; there is no reuse of the trained v6 checkpoint.
+- Data: unchanged VideoChat-Flash LongVid manifest, 5,870 QA rows, `img2`, 1 FPS, and 64-512 frames.
+- Trainable scope: 358,442,496 non-gate LACT parameters. The 31,104 memory-gate parameters, original ViT, projector, and LM are frozen.
+- Optimizer and schedule: one uniform non-gate FW group with the v4/v6 LR `2e-5 -> 1e-6`, 3% warmup, cosine decay, weight decay 0, and one epoch. No gate optimizer group exists.
+- Stabilization, hardware, and packing: unchanged rho-1 NS5/state-adjoint clipping, FSDP global clip 1.0, 8xH100, global batch 16, 8K packs, 1 FPS, 64-512 frames, 2,141 packed samples, and expected 134 optimizer steps.
+- Training W&B: [`v7`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-frozen-seed42-ns5r1-stgr1-v7).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FW_train_longvid_v7.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-frozen-seed42-ns5r1-stgr1-v7/<timestamp>/hf-134`.

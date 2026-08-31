@@ -44,6 +44,7 @@ cache_dir = Path(
 
 model_cfg = VideoChat3LACTDense4BConfig(
     train_lact_only=env_bool("VIDEOCHAT3_TRAIN_LACT_ONLY"),
+    freeze_lact_memory_gate=env_bool("VIDEOCHAT3_FREEZE_LACT_MEMORY_GATE"),
     vision_config=VideoChat3LACTVisionConfig(
         attn_impl="flash_attention_2",
         clip_ns_grad_ratio=True,

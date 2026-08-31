@@ -102,6 +102,21 @@ class VideoChat3ForConditionalGeneration(BaseModel):
             logger.info(
                 f"Train LACT-only vision parameters: {trainable_numel / 1e6:.1f}M"
             )
+        if getattr(self.config, "freeze_lact_memory_gate", False):
+            if not hasattr(self.vision_tower, "_is_lact_state_key"):
+                raise TypeError(
+                    "freeze_lact_memory_gate requires a VideoChat3 LACT vision tower"
+                )
+            frozen_gate_numel = 0
+            for name, parameter in self.vision_tower.named_parameters():
+                if name.endswith("memory_gate"):
+                    parameter.requires_grad_(False)
+                    frozen_gate_numel += parameter.numel()
+            if frozen_gate_numel == 0:
+                raise ValueError("No LACT memory gates were found to freeze")
+            logger.info(
+                f"Freeze LACT memory gates: {frozen_gate_numel / 1e6:.3f}M"
+            )
 
     @override
     def fully_shard(
