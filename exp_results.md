@@ -215,7 +215,7 @@ The user stopped v5 after step 33 because the paired loss remained extremely clo
 
 ## v6 - VideoChat-Flash LongVid, Random Gate Initialization
 
-**Status:** Running.
+**Status:** Training and inspect complete; core evaluation running.
 
 - Objective: give the FW residual direct control over the initial ViT output while changing only gate initialization. All optimizer and data settings return exactly to v4; v5's gate-specific LR is not used.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-random-gate-init`, derived from the retained zero-gate LACT init with seed 42. Its 27 memory gates use PyTorch `nn.Linear`'s default fan-in uniform distribution, `U(-1/sqrt(1152), 1/sqrt(1152))`; gate RMS is `0.01694`, range is `[-0.02942, 0.02917]`, and all non-gate tensors are bitwise unchanged.
@@ -228,7 +228,38 @@ The user stopped v5 after step 33 because the paired loss remained extremely clo
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FW_train_longvid_v6.sh`.
 - Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-seed42-ns5r1-stgr1-v6/20260830212914`.
 - Startup validation: FSDP placed all 358,473,600 LACT parameters, including the random gates, in one uniform `2e-5` optimizer group; original ViT, LM, and projector stayed frozen. Public W&B authenticated as `yibozhong657 (LVSM-Experiment)`. On the same first batch as v4, step 1 global CE was `2.80014372` versus v4's `2.79301167`, proving an immediate functional change; pre-clip grad norm was a finite `3.9165` versus v4's `3.0724`, rank-0 peak memory stayed exactly `45.75 GB`, and no NaN/OOM occurred.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-seed42-ns5r1-stgr1-v6/20260830212914/hf-134`.
+- Final checkpoint: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-seed42-ns5r1-stgr1-v6/20260830212914/hf-134`.
+
+### Checkpoint Diagnostics
+
+Diagnostics compare the final checkpoint with the seed-42 random-gate initialization, not with the zero-gate LACT init.
+
+| Parameter group | Result vs random-gate initialization |
+|---|---:|
+| Memory gate final RMS / mean abs / max abs | `0.016970` / `0.014695` / `0.030273` |
+| Memory gate relative L2 delta | `1.422%` |
+| FW base relative L2 delta | `0.671%` |
+| FW private projections relative L2 delta | `0.979%` |
+| FW value projection relative L2 delta | `0.882%` |
+| FW LR projection relative L2 delta | `0.124%` |
+| FW memory norm | Bitwise unchanged |
+| Original attention / MLP / other vision | Bitwise unchanged |
+| LM / projector | Bitwise unchanged |
+
+The random gate did not collapse: RMS changed only from `0.016945` to `0.016970`. Training completed all 134 steps with first/last-26 global CE means `2.81428/2.79197`. Against the same v4 batches, v6 CE was lower by `0.02877` on average, lower on 125/134 steps, and lower by `0.04249` over the last 26 steps. Pre-clip grad norm had mean `3.688`, median `2.849`, and maximum `20.599` at step 133; all 134 steps exceeded 1 and were handled by the global clip. Mean step time was 221.58 seconds, maximum allocated memory was 56.64 GB, and final LR was `1.003e-6`.
+
+The fixed six-video probe confirms persistent functional control rather than a return to Base. Native per-sample metrics are `/mnt/localssd/VideoChat3/feature_similarity/base_v1_v4/v6.json`.
+
+| Duration | ViT cosine / relative L2 vs Base | Projected cosine / relative L2 vs Base |
+|---|---:|---:|
+| Short, 3 videos | `0.998068 / 6.38%` | `0.992004 / 15.25%` |
+| Long, 3x1,024 frames | `0.998031 / 6.51%` | `0.991189 / 14.56%` |
+
+For the long videos, projected relative L2 was `14.64%` in the first temporal quarter and `14.70%` in the last. The random gate therefore increases overall visual-token control substantially over v4, but still does not create horizon-dependent divergence across 256 recurrent clips.
+
+### Core Evaluation
+
+Native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-lact-v6-core/VideoChat3-4B-LACT-v6/T20260831_G9a1c4f2d`. Evaluation is in progress; Video-MME Short completed at `80.10` with 0/900 prediction or scoring failures.
 
 ## v7 - VideoChat-Flash LongVid, Frozen Random Gate
 
