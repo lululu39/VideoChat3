@@ -363,7 +363,7 @@ Conclusion: a `15%` global projected-feature relative L2 change, despite lowerin
 
 ## v4 FW Residual Scaling Sweep
 
-**Status:** One-video smoke passed; full 96-video run prepared.
+**Status:** Completed. No evidence that v4 is under-scaled; the residual is directional but not beneficial at its learned sign/magnitude.
 
 - Objective: directly test whether v4's learned FW direction is useful but under-scaled. At the LM-facing projected-token boundary, compute `h(alpha) = h_base + alpha * (h_v4 - h_base)` for `alpha in {-2, 0, 0.5, 1, 2, 4}`. This exact output-level interpolation is used instead of multiplying internal gates, which would introduce nonlinear layer-to-layer changes and would not satisfy the stated formula.
 - Model and data: v4 checkpoint `20260830064443/hf-134` on the identical seed-42 sample of 96 Video-MME Long videos and 288 one-token-answer questions used by both prior teacher-forced experiments. Inputs, prompts, cached 1,024 frames, and token/pixel budgets are unchanged.
@@ -372,3 +372,25 @@ Conclusion: a `15%` global projected-feature relative L2 change, despite lowerin
 - Reproducible implementation: `scripts/eval_videochat3_v4_fw_residual_sweep.py`; eight-GPU launcher `scripts/eval_videochat3_v4_fw_residual_sweep.sh`.
 - Expected artifact: `/mnt/localssd/VideoChat3/eval/v4-fw-residual-alpha-sweep`.
 - Smoke validation: one 1,024-frame video and three questions completed. `alpha=0` exactly reproduced the independent Base smoke NLL `1.11639204`; realized alpha projections were `-1.99995/0/0.50002/1/1.99986/3.99996`. The video's learned v4 residual was `4.1641%` relative L2 at `alpha=1` and scaled to `8.3277%/16.6563%` at `alpha=2/4`. Smoke NLL is not interpreted because it contains only one video.
+
+Native artifacts: `/mnt/localssd/VideoChat3/eval/v4-fw-residual-alpha-sweep`. All 96 videos and 288 questions completed once across eight rank files, and the GPU-exclusive watchdog recorded a clean exit. `alpha=0` again exactly reproduces the prior Base/gate-zero aggregate NLL `1.27245085`, providing an independent endpoint check. Mean realized alpha projections were within `1.1e-4` of their targets.
+
+| Alpha | Mean answer NLL | Median NLL | Mean correct-answer probability | Feature relative L2 / cosine vs Base |
+|---:|---:|---:|---:|---:|
+| `-2` | `1.64566` | `1.43448` | `38.15%` | `9.5379% / 0.995449` |
+| `0` (Base) | `1.27245` | `0.62638` | `51.83%` | `0.0000% / 1.000000` |
+| `0.5` | `1.27588` | `0.64615` | `51.63%` | `2.3926% / 0.999710` |
+| `1` (v4) | `1.27922` | `0.63219` | `51.52%` | `4.7690% / 0.998849` |
+| `2` | `1.31829` | `0.70730` | `50.06%` | `9.5377% / 0.995410` |
+| `4` | `2.28455` | `2.27868` | `21.88%` | `19.0762% / 0.981950` |
+
+| Paired contrast | Mean NLL delta | Video-cluster bootstrap 95% CI |
+|---|---:|---:|
+| `alpha=-2` - Base | `+0.37321` | `[+0.20105, +0.56062]` |
+| `alpha=0.5` - Base | `+0.00343` | `[-0.00466, +0.01176]` |
+| `alpha=1` - Base | `+0.00677` | `[-0.00415, +0.01766]` |
+| `alpha=2` - Base | `+0.04584` | `[-0.01727, +0.12871]` |
+| `alpha=4` - Base | `+1.01210` | `[+0.74212, +1.28546]` |
+| `alpha=2` - `alpha=-2` | `-0.32738` | `[-0.49756, -0.16461]` |
+
+Conclusion: larger positive FW amplitude does not recover hidden utility. `alpha=0/0.5/1/2` is statistically flat, with point estimates monotonically worsening as positive amplitude grows; `alpha=4` causes a large, significant collapse. Thus v4 is not limited by a gate that is simply too small. At equal `9.54%` feature divergence, however, `alpha=2` is decisively better than `alpha=-2`, so the learned residual is not sign-symmetric random noise and contains directional structure. The precise conclusion is a weak directional residual that provides no measurable benefit over Base, not an under-amplified useful residual. Together with the equal-budget random perturbation result, this also shows that downstream sensitivity depends strongly on feature direction: arbitrary 15% noise is mostly ignored, while extrapolating the learned v4 direction to 19% is highly destructive.

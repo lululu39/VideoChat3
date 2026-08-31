@@ -36,6 +36,11 @@ def alpha_label(alpha: float) -> str:
 CONDITIONS = tuple(alpha_label(alpha) for alpha in ALPHAS)
 ALPHA_BY_CONDITION = dict(zip(CONDITIONS, ALPHAS, strict=True))
 COMPARISONS = {
+    "alpha_m2_minus_alpha_0": (alpha_label(-2.0), alpha_label(0.0)),
+    "alpha_0p5_minus_alpha_0": (alpha_label(0.5), alpha_label(0.0)),
+    "alpha_1_minus_alpha_0": (alpha_label(1.0), alpha_label(0.0)),
+    "alpha_2_minus_alpha_0": (alpha_label(2.0), alpha_label(0.0)),
+    "alpha_4_minus_alpha_0": (alpha_label(4.0), alpha_label(0.0)),
     "alpha_0p5_minus_alpha_1": (alpha_label(0.5), alpha_label(1.0)),
     "alpha_0_minus_alpha_1": (alpha_label(0.0), alpha_label(1.0)),
     "alpha_2_minus_alpha_1": (alpha_label(2.0), alpha_label(1.0)),
