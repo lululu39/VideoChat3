@@ -312,7 +312,7 @@ The user stopped v7 after step 6 because the current training configuration was 
 
 ## v8 - NExT-QA Open-Ended, v4 FW-Only Recipe
 
-**Status:** Training in progress; startup validated through step 3/343.
+**Status:** Stopped by user at step 147/343; diagnostic-only, with no HF checkpoint or evaluation.
 
 - Objective: test whether manually annotated causal and temporal video QA provides a cleaner trainable signal for the zero-gate LACT fast-weight path than the contaminated VideoChat-Flash LongVid data. This is a data-only comparison against v4; initialization, trainable scope, optimizer, stabilization, batch/packing, frame limits, and epoch count are unchanged.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; no v4-v7 checkpoint reuse. The 27 memory gates are zero initialized exactly as in v4.
@@ -326,5 +326,19 @@ The user stopped v7 after step 6 because the current training configuration was 
 - Prepared data: `/mnt/localssd/dataset/VideoChat3/NExTQA/NExTQA_OE_Train_VideoChat3.json`; conversion audit is `/mnt/localssd/dataset/VideoChat3/NExTQA/nextqa_conversion_summary.json`.
 - Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-nextqa-oe37496-8xh100-gb16-video1fps-f512-s8k-fwlr2e5-ns5r1-stgr1-v8/20260831173621`.
 - Startup validation: all ranks loaded the expected 37,496 rows and v4-equivalent optimizer scope; the framework reports the same LACT-only parameters under its aggregate `ViT` group at `2e-5`, with projector and LM frozen. Public W&B authenticated as `yibozhong657 (LVSM-Experiment)`. Steps 1-3 had global CE `4.89555/4.92955/4.89434`, finite pre-clip norms `1.4981/3.5470/1.1570`, peak memory no higher than `46.66 GB`, and the expected warmup LR `0/2e-6/4e-6`. There was no NaN, OOM, or media error. After dataloader warmup, steps 2-3 took `93.06/91.32` seconds, giving an initial ETA of about 8h40m from step 3.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-nextqa-oe37496-8xh100-gb16-video1fps-f512-s8k-fwlr2e5-ns5r1-stgr1-v8/20260831173621/hf-343`.
-- Planned evaluation: checkpoint integrity/parameter-delta inspection, the fixed Base-vs-LACT core evaluation, and held-out NExT-QA validation evaluation without using validation rows for training.
+- Expected artifact if completed: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-nextqa-oe37496-8xh100-gb16-video1fps-f512-s8k-fwlr2e5-ns5r1-stgr1-v8/20260831173621/hf-343`.
+
+The user stopped v8 after step 147 to replace another incomplete FW training run with a direct Base-model visual-token sensitivity test. The run stopped cleanly, all eight GPUs were released, and public W&B was marked failed. No HF checkpoint exists. The retained `ckpt-step-100` DCP state is diagnostic-only and must not be resumed or evaluated. Through step 147, first/last-29 global CE means were `4.97207/4.97358`, so the harder NExT-QA loss remained flat. Mean step time was `92.72` seconds; pre-clip grad norm had mean `1.419`, median `1.168`, maximum `6.945`, and exceeded 1 on 110/147 steps. Maximum allocated memory was `46.98 GB`.
+
+## Base Visual-Token Perturbation - v8 Follow-up
+
+**Status:** One-video smoke passed; full 96-video run prepared.
+
+- Objective: determine whether a visual-feature change as large as the approximately 15% LM-facing divergence produced by v6 materially changes the correct-answer likelihood, and whether a structured cross-clip temporal signal behaves differently from an equal-magnitude random change.
+- Model and data: unmodified `/mnt/localssd/VideoChat3/VideoChat3-4B` on exactly the same seed-42 sample of 96 Video-MME Long videos and three questions per video used by the v6 teacher-forced causal ablation, for 288 paired questions. Cached 1,024-frame visual inputs, prompts, correct one-token answer letters, and all pixel/token budgets are unchanged.
+- Intervention point: projected visual tokens immediately before they replace `<video>` placeholders in the frozen Base LM. Every intervention is calibrated independently per video so the realized global `||delta V||_2 / ||V||_2` is 15%.
+- Conditions: (1) unmodified Base tokens; (2) deterministic per-video iid Gaussian additive noise; (3) a centered standard sinusoidal vector for each non-overlapping four-frame group, shared by every projected token from that group. Centering removes the feature-wise constant component, so the third intervention contains temporal variation rather than a common embedding bias. Random and sinusoidal conditions have the same 15% perturbation budget.
+- Metric: teacher-forced mean NLL of the true answer-letter token, mean correct-answer probability, paired NLL deltas, and 10,000-resample 95% bootstrap confidence intervals clustered by video. Feature cosine, norm ratio, and realized relative L2 are audited separately for every video.
+- Reproducible implementation: `scripts/eval_videochat3_base_visual_token_perturbations.py`; eight-GPU launcher `scripts/eval_videochat3_base_visual_token_perturbations.sh`.
+- Expected artifact: `/mnt/localssd/VideoChat3/eval/base-visual-token-perturbations-r015`.
+- Smoke validation: one 1,024-frame video and three questions completed. Random/sinusoidal realized relative L2 was `15.0009%/15.0008%`, both had feature cosine `0.988936`, and all projected-token counts matched the LM placeholders. Smoke NLL is not interpreted because it contains only one video.
