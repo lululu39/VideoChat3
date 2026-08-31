@@ -270,7 +270,28 @@ Native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-lact-v6-core/VideoCh
 
 All 900 Short, 900 Long, and 4,000 MVBench predictions were produced and scored successfully. Against Base, exact output strings remained identical for `95.22%/95.44%/96.30%` of Short/Long/MVBench examples, and correctness remained identical for `98.11%/97.78%/97.63%`.
 
-Conclusion: random nonzero gates solve the narrow control problem but not the downstream capability problem. Compared with v4, v6 keeps a roughly 3x larger LM-facing feature deviation (`14.6%` versus `4.8%` on the long probe), lowers paired training CE on 125/134 batches, and materially increases FW gradients, yet it remains at Base parity on every core benchmark. Its long-video feature deviation is also flat from the first to last temporal quarter. More feature movement alone is therefore insufficient; v7 tests whether preventing the optimizer from changing the random gate forces the remaining FW parameters to adapt more usefully.
+Conclusion: random nonzero gates solve the narrow control problem but not the downstream capability problem. Compared with v4, v6 keeps a roughly 3x larger LM-facing feature deviation (`14.6%` versus `4.8%` on the long probe), lowers paired training CE on 125/134 batches, and materially increases FW gradients, yet it remains at Base parity on every core benchmark. Its long-video feature deviation is also flat from the first to last temporal quarter. More feature movement alone is therefore insufficient.
+
+### Teacher-Forced Causal Ablation
+
+Native artifacts: `/mnt/localssd/VideoChat3/eval/v6-teacher-forced-ablation`. The reproducible implementation is `scripts/eval_videochat3_lact_teacher_forced_ablation.py` with the eight-GPU launcher `scripts/eval_videochat3_lact_v6_teacher_forced.sh`.
+
+The probe samples 96 Video-MME Long videos with seed 42 and evaluates all three questions per video, for 288 paired questions. Every answer letter is exactly one tokenizer token. Normal and perturbed conditions share the same cached 1,024 frames and teacher-forced prompt; shuffle permutes non-overlapping four-frame chunks while keeping timestamp positions ordered, reset reinitializes FW state before every chunk, and gate-zero bypasses the FW scan and is algebraically Base because every original tensor is frozen. Confidence intervals use 10,000 bootstrap resamples clustered by video.
+
+| Condition | Mean answer NLL | Median NLL | Mean correct-answer probability |
+|---|---:|---:|---:|
+| Sequential FW | 1.26768 | 0.62716 | 51.86% |
+| Shuffle 4-frame chunks | 1.36070 | 0.72620 | 49.27% |
+| Reset state every chunk | 1.26346 | 0.60323 | 52.05% |
+| Gate zero / Base | 1.27245 | 0.62638 | 51.83% |
+
+| Paired contrast | Mean NLL delta | Median delta | Positive fraction | Video-cluster bootstrap 95% CI |
+|---|---:|---:|---:|---:|
+| Shuffle - sequential | +0.09302 | +0.00962 | 56.94% | `[+0.02979, +0.15645]` |
+| Reset - sequential | -0.00421 | -0.00171 | 43.06% | `[-0.02185, +0.01376]` |
+| Gate-zero - sequential | +0.00477 | +0.00054 | 53.47% | `[-0.01105, +0.02118]` |
+
+The ordered visual stream matters: chunk shuffling significantly worsens NLL, although this contrast measures temporal order/content-to-timestamp alignment rather than pure video-versus-text dependence. In contrast, resetting FW state does not hurt and is slightly better on average, with a confidence interval centered around zero. Removing the entire FW residual also has no reliable effect. Thus v6 provides no measurable evidence that its cross-chunk recurrent state or even its static FW residual helps answer Video-MME Long questions; the frozen Base LM uses the ordered clip tokens directly.
 
 ## v7 - VideoChat-Flash LongVid, Frozen Random Gate
 
