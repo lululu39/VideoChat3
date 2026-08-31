@@ -274,7 +274,7 @@ Conclusion: random nonzero gates solve the narrow control problem but not the do
 
 ## v7 - VideoChat-Flash LongVid, Frozen Random Gate
 
-**Status:** Prepared and cleared to launch after completed v6 evaluation.
+**Status:** Stopped by user at step 6; diagnostic-only, with no checkpoint or evaluation.
 
 - Objective: prevent the optimization from reducing FW control by closing the gate. This is a single-variable comparison against v6: the identical nonzero random gates participate in every forward but remain frozen.
 - Initialization: the same seed-42 `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-random-gate-init` used by v6. All 31,104 gate values remain fixed at RMS `0.01694`; there is no reuse of the trained v6 checkpoint.
@@ -284,4 +284,7 @@ Conclusion: random nonzero gates solve the narrow control problem but not the do
 - Stabilization, hardware, and packing: unchanged rho-1 NS5/state-adjoint clipping, FSDP global clip 1.0, 8xH100, global batch 16, 8K packs, 1 FPS, 64-512 frames, 2,141 packed samples, and expected 134 optimizer steps.
 - Training W&B: [`v7`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-frozen-seed42-ns5r1-stgr1-v7).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FW_train_longvid_v7.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-frozen-seed42-ns5r1-stgr1-v7/<timestamp>/hf-134`.
+- Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-longvid5870-8xh100-gb16-img1fps-f512-s8k-fwlr2e5-randgate-frozen-seed42-ns5r1-stgr1-v7/20260831144318`.
+- Startup validation: every rank reported `Freeze LACT memory gates: 0.031M`; the optimizer contained one uniform non-gate FW group and no gate group. Step 1 matched v6 exactly in global CE (`2.80014372`) because both use the identical random-gate initialization; its pre-clip grad norm was `3.1464`, lower than v6's `3.9165` because gate gradients were absent. Steps 1-6 were finite with no NaN/OOM.
+
+The user stopped v7 after step 6 because the current training configuration was judged to have no further research value. All eight GPUs were released, the W&B state was marked failed, and no checkpoint was produced. Do not resume or evaluate this run.
