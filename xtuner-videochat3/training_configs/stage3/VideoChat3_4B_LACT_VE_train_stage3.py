@@ -55,7 +55,9 @@ model_cfg = VideoChat3LACTDense4BConfig(
 sample_max_length = 8192
 pack_max_length = 8192
 frame_max_pixels = 224 * 224
-video_max_total_pixels = 128 * frame_max_pixels
+video_max_total_pixels = int(
+    os.getenv("VIDEOCHAT3_VIDEO_MAX_TOTAL_PIXELS", 128 * frame_max_pixels)
+)
 video_max_frames = 3600
 reference_global_batch_size = 128
 reference_vit_lr = 8e-5 / 4
