@@ -312,7 +312,7 @@ The user stopped v7 after step 6 because the current training configuration was 
 
 ## v8 - NExT-QA Open-Ended, v4 FW-Only Recipe
 
-**Status:** Prepared for launch.
+**Status:** Training in progress; startup validated through step 3/343.
 
 - Objective: test whether manually annotated causal and temporal video QA provides a cleaner trainable signal for the zero-gate LACT fast-weight path than the contaminated VideoChat-Flash LongVid data. This is a data-only comparison against v4; initialization, trainable scope, optimizer, stabilization, batch/packing, frame limits, and epoch count are unchanged.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; no v4-v7 checkpoint reuse. The 27 memory gates are zero initialized exactly as in v4.
@@ -320,9 +320,11 @@ The user stopped v7 after step 6 because the current training configuration was 
 - Trainable scope: the same 358,473,600 LACT-added parameters as v4, including FW bases, private Q/K/V/O projections, memory gates, LR projections, and memory normalization. Original ViT, LM, and projector remain frozen.
 - Optimizer and schedule: the exact v4 recipe for all LACT parameters, including the gates: peak LR `2e-5`, minimum LR `1e-6`, cosine decay, 3% warmup, weight decay 0, and one epoch. There is no gate-specific optimizer group.
 - Stabilization: unchanged `clip_ns_grad_ratio=True` and `clip_state_grad_ratio=True` at rho 1, plus true FSDP global gradient norm clipping at 1.0.
-- Hardware and packing: unchanged 8xH100, global batch 16, 8K sample/pack length, 1 FPS, 64-512 frames, and four-frame LACT groups. Exact packed-sample and optimizer-step counts will be recorded after deterministic cache construction at startup.
+- Hardware and packing: unchanged 8xH100, global batch 16, 8K sample/pack length, 1 FPS, 64-512 frames, and four-frame LACT groups. Deterministic caching packs the 37,496 source rows into 5,473 samples for 343 optimizer steps.
 - Training W&B: [`v8`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-fw4-fwonly-nextqa-oe37496-8xh100-gb16-video1fps-f512-s8k-fwlr2e5-ns5r1-stgr1-v8).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FW_train_nextqa_v8.sh`.
 - Prepared data: `/mnt/localssd/dataset/VideoChat3/NExTQA/NExTQA_OE_Train_VideoChat3.json`; conversion audit is `/mnt/localssd/dataset/VideoChat3/NExTQA/nextqa_conversion_summary.json`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-nextqa-oe37496-8xh100-gb16-video1fps-f512-s8k-fwlr2e5-ns5r1-stgr1-v8/<timestamp>/hf-<final-step>`.
+- Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-nextqa-oe37496-8xh100-gb16-video1fps-f512-s8k-fwlr2e5-ns5r1-stgr1-v8/20260831173621`.
+- Startup validation: all ranks loaded the expected 37,496 rows and v4-equivalent optimizer scope; the framework reports the same LACT-only parameters under its aggregate `ViT` group at `2e-5`, with projector and LM frozen. Public W&B authenticated as `yibozhong657 (LVSM-Experiment)`. Steps 1-3 had global CE `4.89555/4.92955/4.89434`, finite pre-clip norms `1.4981/3.5470/1.1570`, peak memory no higher than `46.66 GB`, and the expected warmup LR `0/2e-6/4e-6`. There was no NaN, OOM, or media error. After dataloader warmup, steps 2-3 took `93.06/91.32` seconds, giving an initial ETA of about 8h40m from step 3.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-nextqa-oe37496-8xh100-gb16-video1fps-f512-s8k-fwlr2e5-ns5r1-stgr1-v8/20260831173621/hf-343`.
 - Planned evaluation: checkpoint integrity/parameter-delta inspection, the fixed Base-vs-LACT core evaluation, and held-out NExT-QA validation evaluation without using validation rows for training.
