@@ -332,7 +332,7 @@ The user stopped v8 after step 147 to replace another incomplete FW training run
 
 ## Base Visual-Token Perturbation - v8 Follow-up
 
-**Status:** One-video smoke passed; full 96-video run prepared.
+**Status:** Completed. The 15% random and sinusoidal feature changes have no statistically reliable aggregate NLL effect.
 
 - Objective: determine whether a visual-feature change as large as the approximately 15% LM-facing divergence produced by v6 materially changes the correct-answer likelihood, and whether a structured cross-clip temporal signal behaves differently from an equal-magnitude random change.
 - Model and data: unmodified `/mnt/localssd/VideoChat3/VideoChat3-4B` on exactly the same seed-42 sample of 96 Video-MME Long videos and three questions per video used by the v6 teacher-forced causal ablation, for 288 paired questions. Cached 1,024-frame visual inputs, prompts, correct one-token answer letters, and all pixel/token budgets are unchanged.
@@ -342,3 +342,21 @@ The user stopped v8 after step 147 to replace another incomplete FW training run
 - Reproducible implementation: `scripts/eval_videochat3_base_visual_token_perturbations.py`; eight-GPU launcher `scripts/eval_videochat3_base_visual_token_perturbations.sh`.
 - Expected artifact: `/mnt/localssd/VideoChat3/eval/base-visual-token-perturbations-r015`.
 - Smoke validation: one 1,024-frame video and three questions completed. Random/sinusoidal realized relative L2 was `15.0009%/15.0008%`, both had feature cosine `0.988936`, and all projected-token counts matched the LM placeholders. Smoke NLL is not interpreted because it contains only one video.
+
+Native artifacts: `/mnt/localssd/VideoChat3/eval/base-visual-token-perturbations-r015`. All 96 videos and 288 questions completed once, all eight rank files were present, and the GPU-exclusive watchdog recorded a clean exit. The unmodified Base NLL exactly reproduces the prior v6 gate-zero condition, independently validating sample and prompt identity.
+
+| Condition | Mean answer NLL | Median NLL | Mean correct-answer probability | Feature relative L2 / cosine / norm ratio |
+|---|---:|---:|---:|---:|
+| Base | `1.27245` | `0.62638` | `51.83%` | `0.00% / 1.000000 / 1.0000` |
+| Random additive noise | `1.28310` | `0.65612` | `51.33%` | `15.0009% / 0.988935 / 1.0112` |
+| Four-frame sinusoidal encoding | `1.27414` | `0.67183` | `51.49%` | `15.0009% / 0.988935 / 1.0112` |
+
+| Paired contrast | Mean NLL delta | Median delta | Positive fraction | Video-cluster bootstrap 95% CI |
+|---|---:|---:|---:|---:|
+| Random - Base | `+0.01065` | `+0.00054` | `53.47%` | `[-0.00651, +0.02909]` |
+| Sinusoidal - Base | `+0.00169` | `-0.00020` | `47.92%` | `[-0.01708, +0.02141]` |
+| Sinusoidal - Random | `-0.00896` | `-0.00080` | `47.92%` | `[-0.02704, +0.00935]` |
+
+The small means are not solely cancellation of ubiquitous large effects. For random perturbations, `34.7%/57.3%/74.0%` of question-level absolute NLL changes are below `0.01/0.05/0.10`; the corresponding sinusoidal fractions are `33.3%/55.9%/69.1%`. There are real tails in both directions, but neither perturbation produces a consistent population-level degradation or improvement.
+
+Conclusion: a `15%` global projected-feature relative L2 change, despite lowering cosine to about `0.989`, is not intrinsically a large functional intervention for the frozen LM. This explains how v6 could move LM-facing features by roughly `14%-15%` while remaining Base-equivalent: most of that movement can lie in directions to which the answer logits are locally insensitive. The equal-budget sinusoidal encoding also provides no reliable gain, but this does not show that temporal position is useless; the Base LM was never trained to interpret this arbitrary additive basis and already receives explicit timestamp tokens. Feature L2 should therefore not be used as a proxy for learned control without downstream NLL/logit sensitivity or task-Jacobian-aligned evidence.
