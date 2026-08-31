@@ -215,7 +215,7 @@ The user stopped v5 after step 33 because the paired loss remained extremely clo
 
 ## v6 - VideoChat-Flash LongVid, Random Gate Initialization
 
-**Status:** Training and inspect complete; core evaluation running.
+**Status:** Completed. Usable checkpoint, but Base-parity evaluation despite substantially larger visual-token control.
 
 - Objective: give the FW residual direct control over the initial ViT output while changing only gate initialization. All optimizer and data settings return exactly to v4; v5's gate-specific LR is not used.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-random-gate-init`, derived from the retained zero-gate LACT init with seed 42. Its 27 memory gates use PyTorch `nn.Linear`'s default fan-in uniform distribution, `U(-1/sqrt(1152), 1/sqrt(1152))`; gate RMS is `0.01694`, range is `[-0.02942, 0.02917]`, and all non-gate tensors are bitwise unchanged.
@@ -259,11 +259,22 @@ For the long videos, projected relative L2 was `14.64%` in the first temporal qu
 
 ### Core Evaluation
 
-Native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-lact-v6-core/VideoChat3-4B-LACT-v6/T20260831_G9a1c4f2d`. Evaluation is in progress; Video-MME Short completed at `80.10` with 0/900 prediction or scoring failures.
+Native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-lact-v6-core/VideoChat3-4B-LACT-v6/T20260831_G9a1c4f2d`.
+
+| Benchmark | Base | v6 | Delta |
+|---|---:|---:|---:|
+| Video-MME Short | 80.70 | 80.10 | -0.60 |
+| Video-MME Long | 60.30 | 60.30 | +0.00 |
+| MVBench MP4 64-frame | 70.83 | 70.85 | +0.02 |
+| MMBench DEV EN V1.1 | 35.91 | 35.76 | -0.15 |
+
+All 900 Short, 900 Long, and 4,000 MVBench predictions were produced and scored successfully. Against Base, exact output strings remained identical for `95.22%/95.44%/96.30%` of Short/Long/MVBench examples, and correctness remained identical for `98.11%/97.78%/97.63%`.
+
+Conclusion: random nonzero gates solve the narrow control problem but not the downstream capability problem. Compared with v4, v6 keeps a roughly 3x larger LM-facing feature deviation (`14.6%` versus `4.8%` on the long probe), lowers paired training CE on 125/134 batches, and materially increases FW gradients, yet it remains at Base parity on every core benchmark. Its long-video feature deviation is also flat from the first to last temporal quarter. More feature movement alone is therefore insufficient; v7 tests whether preventing the optimizer from changing the random gate forces the remaining FW parameters to adapt more usefully.
 
 ## v7 - VideoChat-Flash LongVid, Frozen Random Gate
 
-**Status:** Prepared; launch intentionally waits for v6 training, inspect, and core evaluation.
+**Status:** Prepared and cleared to launch after completed v6 evaluation.
 
 - Objective: prevent the optimization from reducing FW control by closing the gate. This is a single-variable comparison against v6: the identical nonzero random gates participate in every forward but remain frozen.
 - Initialization: the same seed-42 `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-random-gate-init` used by v6. All 31,104 gate values remain fixed at RMS `0.01694`; there is no reuse of the trained v6 checkpoint.
