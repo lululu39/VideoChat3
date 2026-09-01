@@ -1,0 +1,38 @@
+{
+  "model": {
+    "VideoChat3-4B-Base-R4-init": {
+      "class": "VideoChat3",
+      "model_path": "/mnt/localssd/VideoChat3/VideoChat3-4B-R4-mean-init",
+      "use_custom_prompt": false,
+      "use_vllm": false,
+      "max_new_tokens": 64
+    }
+  },
+  "data": {
+    "Video-MME_short_2fps_limit_1024_448px_80kctx": {
+      "class": "VideoMME",
+      "dataset": "Video-MME",
+      "fps": 2.0,
+      "duration_filter": "short",
+      "frames_limit": 1024,
+      "min_pixels": 784,
+      "max_pixels": 200704,
+      "total_pixels": 125440000
+    },
+    "Video-MME_long_2fps_limit_1024_448px_80kctx": {
+      "class": "VideoMME",
+      "dataset": "Video-MME",
+      "fps": 2.0,
+      "duration_filter": "long",
+      "frames_limit": 1024,
+      "min_pixels": 784,
+      "max_pixels": 200704,
+      "total_pixels": 125440000
+    },
+    "MVBench_MP4_64frame": {
+      "class": "MVBench_MP4",
+      "dataset": "MVBench_MP4",
+      "nframe": 64
+    }
+  }
+}
