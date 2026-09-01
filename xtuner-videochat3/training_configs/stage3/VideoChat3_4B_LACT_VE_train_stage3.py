@@ -57,6 +57,8 @@ if model_variant == "lact":
         freeze_projector=not train_projector,
         vision_config=VideoChat3LACTVisionConfig(
             attn_impl="flash_attention_2",
+            memory_type=os.getenv("VIDEOCHAT3_MEMORY_TYPE", "swiglu"),
+            fw_num_heads=int(os.getenv("VIDEOCHAT3_FW_NUM_HEADS", "1")),
             inner_optim=os.getenv("VIDEOCHAT3_INNER_OPTIM", "muon"),
             clip_ns_grad_ratio=False,
             recompute_ns5_backward=True,
@@ -226,6 +228,7 @@ trainer = TrainerConfig(
                     "lact",
                     "fast-weight",
                     "fw-window-4",
+                    f"memory-{model_cfg.vision_config.memory_type}",
                     f"inner-{model_cfg.vision_config.inner_optim}",
                     "ns5-exact-backward",
                     "ns5-backward-recompute",

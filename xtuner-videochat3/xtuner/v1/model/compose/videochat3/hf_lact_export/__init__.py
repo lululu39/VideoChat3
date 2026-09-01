@@ -44,6 +44,7 @@ def export_lact_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
         "macro_temporal_compression_factor",
         "init_pos_emb_height",
         "init_pos_emb_width",
+        "memory_type",
         "fw_inter_multi",
         "fw_num_heads",
         "fw_base_lr",

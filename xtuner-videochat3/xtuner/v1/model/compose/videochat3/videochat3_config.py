@@ -55,11 +55,12 @@ class VideoChat3VisionConfig(BaseModel):
 
 class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
     model_type: str = "videochat3_lact_vision"
+    memory_type: Literal["swiglu", "linear"] = "swiglu"
     fw_inter_multi: float = 2.0
     fw_num_heads: int = 1
     fw_base_lr: float = 0.01
     fw_muon_update_steps: int = 5
-    inner_optim: Literal["muon", "sgd"] = "muon"
+    inner_optim: Literal["muon", "delta", "sgd"] = "muon"
     fw_share_proj: bool = False
     fw_share_init: bool = True
     fw_norm_epsilon: float = 1e-5
@@ -90,6 +91,8 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
                 "fw_share_init only applies to private projections; set it to "
                 "False when fw_share_proj=True"
             )
+        if self.memory_type == "linear" and self.fw_share_proj:
+            raise ValueError("linear memory currently requires private projections")
         if self.fw_base_lr <= 0:
             raise ValueError("fw_base_lr must be positive")
         if self.fw_muon_update_steps < 0:
@@ -98,6 +101,10 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
             raise ValueError("fw_norm_epsilon must be positive")
         if self.fw_update_layer_group_size <= 0:
             raise ValueError("fw_update_layer_group_size must be positive")
+        if self.memory_type == "linear" and self.fw_update_layer_group_size != 1:
+            raise ValueError(
+                "linear memory currently requires fw_update_layer_group_size=1"
+            )
 
     def build(self):
         from .modeling_vision_lact import VideoChat3VisionLACTModel

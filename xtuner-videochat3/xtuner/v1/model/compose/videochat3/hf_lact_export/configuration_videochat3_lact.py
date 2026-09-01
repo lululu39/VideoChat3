@@ -10,6 +10,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
 
     def __init__(
         self,
+        memory_type: str = "swiglu",
         fw_inter_multi: float = 2.0,
         fw_num_heads: int = 1,
         fw_base_lr: float = 0.01,
@@ -29,6 +30,10 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         super().__init__(**kwargs)
         if self.temporal_merge_size != 4:
             raise ValueError(f"VideoChat3-LACT requires temporal_merge_size=4, got {self.temporal_merge_size}")
+        if memory_type not in ("swiglu", "linear"):
+            raise ValueError(
+                f"memory_type must be 'swiglu' or 'linear', got {memory_type!r}"
+            )
         if fw_inter_multi <= 0:
             raise ValueError("fw_inter_multi must be positive")
         if fw_num_heads <= 0 or self.hidden_size % fw_num_heads != 0:
@@ -39,18 +44,25 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
             raise ValueError(
                 "fw_share_init only applies to private projections; set it to False when fw_share_proj=True"
             )
+        if memory_type == "linear" and fw_share_proj:
+            raise ValueError("linear memory currently requires private projections")
         if fw_base_lr <= 0:
             raise ValueError("fw_base_lr must be positive")
         if fw_muon_update_steps < 0:
             raise ValueError("fw_muon_update_steps must be non-negative")
-        if inner_optim not in ("muon", "sgd"):
+        if inner_optim not in ("muon", "delta", "sgd"):
             raise ValueError(
-                f"inner_optim must be 'muon' or 'sgd', got {inner_optim!r}"
+                "inner_optim must be 'muon', 'delta', or the legacy 'sgd' "
+                f"alias, got {inner_optim!r}"
             )
         if fw_norm_epsilon <= 0:
             raise ValueError("fw_norm_epsilon must be positive")
         if fw_update_layer_group_size <= 0:
             raise ValueError("fw_update_layer_group_size must be positive")
+        if memory_type == "linear" and fw_update_layer_group_size != 1:
+            raise ValueError(
+                "linear memory currently requires fw_update_layer_group_size=1"
+            )
         if macro_temporal_compression_factor not in (1, 2, 4, 8):
             raise ValueError(
                 "macro_temporal_compression_factor must be one of (1, 2, 4, 8), "
@@ -61,6 +73,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
                 "lact_inference_state_mode must be 'continuous' or 'reset_state', "
                 f"got {lact_inference_state_mode!r}"
             )
+        self.memory_type = memory_type
         self.fw_inter_multi = fw_inter_multi
         self.fw_num_heads = fw_num_heads
         self.fw_base_lr = fw_base_lr

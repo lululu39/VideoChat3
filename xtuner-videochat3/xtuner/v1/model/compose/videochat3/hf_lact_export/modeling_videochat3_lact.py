@@ -59,6 +59,12 @@ def inverse_softplus(value: float) -> float:
     return value + math.log(-math.expm1(-value))
 
 
+def inverse_sigmoid(value: float) -> float:
+    if not 0 < value < 1:
+        raise ValueError(f"Expected a value in (0, 1), got {value}")
+    return math.log(value / (1 - value))
+
+
 def _zeropower_via_newtonschulz5_impl(matrix: torch.Tensor, steps: int) -> torch.Tensor:
     if steps == 0:
         return matrix
@@ -242,6 +248,50 @@ class _BoundPreviousStateGradient(torch.autograd.Function):
         return *clipped_gradients, None
 
 
+class _CaptureNextLinearStateGradient(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, state: torch.Tensor, ratio_context):
+        ctx.ratio_context = ratio_context
+        return state
+
+    @staticmethod
+    def backward(ctx, gradient: torch.Tensor):
+        ctx.ratio_context.next_state_grad_norm = torch.linalg.vector_norm(
+            gradient,
+            dim=(-2, -1),
+            dtype=torch.float32,
+        )
+        return gradient, None
+
+
+class _BoundPreviousLinearStateGradient(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, state: torch.Tensor, ratio_context):
+        ctx.ratio_context = ratio_context
+        return state
+
+    @staticmethod
+    def backward(ctx, gradient: torch.Tensor):
+        next_norm = ctx.ratio_context.next_state_grad_norm
+        if next_norm is None:
+            raise RuntimeError(
+                "Next linear-state adjoint was not captured before backward"
+            )
+        previous_norm = torch.linalg.vector_norm(
+            gradient,
+            dim=(-2, -1),
+            dtype=torch.float32,
+        )
+        scale = torch.where(
+            previous_norm > _STATE_GRAD_RATIO_RHO * next_norm,
+            _STATE_GRAD_RATIO_RHO
+            * next_norm
+            / previous_norm.clamp_min(_STATE_GRAD_RATIO_EPS),
+            torch.ones_like(previous_norm),
+        )
+        return gradient * scale[..., None, None].to(gradient.dtype), None
+
+
 def zeropower_via_newtonschulz5(
     matrix: torch.Tensor,
     steps: int = 5,
@@ -280,9 +330,10 @@ class FastWeightSwiGLU(nn.Module):
             raise ValueError(f"dim={dim} must be divisible by num_heads={num_heads}")
         if inter_multi <= 0:
             raise ValueError(f"inter_multi must be positive, got {inter_multi}")
-        if inner_optim not in ("muon", "sgd"):
+        if inner_optim not in ("muon", "delta", "sgd"):
             raise ValueError(
-                f"inner_optim must be 'muon' or 'sgd', got {inner_optim!r}"
+                "inner_optim must be 'muon', 'delta', or the legacy 'sgd' "
+                f"alias, got {inner_optim!r}"
             )
         self.dim = dim
         self.num_heads = num_heads
@@ -437,7 +488,7 @@ class FastWeightSwiGLU(nn.Module):
         )
         w1_grad = w1_grad_transposed.transpose(-1, -2)
 
-        if self.inner_optim == "sgd":
+        if self.inner_optim in ("delta", "sgd"):
             w0_update = w0_grad
             w1_update = w1_grad
             w2_update = w2_grad
@@ -477,6 +528,127 @@ class FastWeightSwiGLU(nn.Module):
         return fast_weights, master_weights
 
 
+class FastWeightLinear(nn.Module):
+    """Multi-head linear fast memory with one chunk-level state update."""
+
+    def __init__(
+        self,
+        dim: int,
+        num_heads: int,
+        *,
+        inner_optim: str = "muon",
+        norm_epsilon: float = 1e-5,
+        clip_ns_grad_ratio: bool = False,
+        recompute_ns5_backward: bool = True,
+    ):
+        super().__init__()
+        if num_heads <= 0 or dim % num_heads:
+            raise ValueError(
+                f"dim={dim} must be divisible by positive num_heads={num_heads}"
+            )
+        if inner_optim not in ("muon", "delta", "sgd"):
+            raise ValueError(
+                "inner_optim must be 'muon', 'delta', or the legacy 'sgd' "
+                f"alias, got {inner_optim!r}"
+            )
+        self.dim = dim
+        self.num_heads = num_heads
+        self.head_dim = dim // num_heads
+        self.inner_optim = inner_optim
+        self.clip_ns_grad_ratio = clip_ns_grad_ratio
+        self.recompute_ns5_backward = recompute_ns5_backward
+        self.apply_proj = nn.Sequential(nn.Linear(dim, dim, bias=False), nn.SiLU())
+        self.update_proj = nn.Sequential(nn.Linear(dim, dim, bias=False), nn.SiLU())
+        self.output_proj = nn.Linear(dim, dim, bias=False)
+        self.apply_norm = nn.RMSNorm(
+            dim,
+            eps=norm_epsilon,
+            elementwise_affine=False,
+        )
+        self.output_norm = nn.RMSNorm(
+            dim,
+            eps=norm_epsilon,
+            elementwise_affine=False,
+        )
+        self.reset_parameters()
+
+    @torch.no_grad()
+    def reset_parameters(self) -> None:
+        nn.init.trunc_normal_(self.apply_proj[0].weight, std=0.02)
+        nn.init.trunc_normal_(self.update_proj[0].weight, std=0.02)
+        nn.init.zeros_(self.output_proj.weight)
+
+    def init_state(self, batch_size: int) -> torch.Tensor:
+        weight = self.apply_proj[0].weight
+        dtype = torch.bfloat16 if weight.is_cuda else weight.dtype
+        return torch.zeros(
+            batch_size,
+            self.num_heads,
+            self.head_dim,
+            self.head_dim,
+            device=weight.device,
+            dtype=dtype,
+        )
+
+    def _project_heads(
+        self,
+        x: torch.Tensor,
+        projection: nn.Sequential,
+    ) -> torch.Tensor:
+        batch_size, seq_len, _ = x.shape
+        projected = self.apply_norm(projection(x))
+        projected = projected.reshape(
+            batch_size,
+            seq_len,
+            self.num_heads,
+            self.head_dim,
+        )
+        return F.normalize(projected, dim=-1, eps=1e-5)
+
+    def project_key(self, x: torch.Tensor) -> torch.Tensor:
+        return self._project_heads(x, self.update_proj)
+
+    def forward(self, x: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
+        query = self._project_heads(x, self.apply_proj)
+        output = torch.einsum("blhd,bhde->blhe", query, state)
+        output = output.reshape(x.shape[0], x.shape[1], self.dim)
+        return self.output_proj(self.output_norm(output))
+
+    def update(
+        self,
+        key: torch.Tensor,
+        target: torch.Tensor,
+        learning_rates: torch.Tensor,
+        state: torch.Tensor,
+        muon_update_steps: int,
+    ) -> torch.Tensor:
+        key_heads = self.project_key(key).to(state.dtype)
+        target_heads = target.reshape(
+            target.shape[0],
+            target.shape[1],
+            self.num_heads,
+            self.head_dim,
+        ).to(state.dtype)
+        prediction = torch.einsum("blhd,bhde->blhe", key_heads, state)
+        error = target_heads - prediction
+        weighted_error = error * learning_rates.to(error.dtype).unsqueeze(-1)
+        state_gradient = torch.einsum(
+            "blhd,blhe->bhde",
+            key_heads,
+            weighted_error,
+        ) / key.shape[1]
+        if self.inner_optim == "muon":
+            state_update = zeropower_via_newtonschulz5(
+                state_gradient.flatten(0, 1),
+                muon_update_steps,
+                clip_ns_grad_ratio=self.clip_ns_grad_ratio,
+                recompute_ns5_backward=self.recompute_ns5_backward,
+            ).reshape_as(state_gradient)
+        else:
+            state_update = state_gradient
+        return state + state_update.to(state.dtype)
+
+
 class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
     """Original four-frame attention followed by VideoLACT fast weights."""
 
@@ -493,6 +665,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         fw_num_heads: int = 1,
         fw_base_lr: float = 0.01,
         fw_muon_update_steps: int = 5,
+        memory_type: str = "swiglu",
         inner_optim: str = "muon",
         fw_share_proj: bool = False,
         fw_share_init: bool = True,
@@ -510,6 +683,13 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             activation=activation,
             attn_bias=attn_bias,
         )
+        if memory_type not in ("swiglu", "linear"):
+            raise ValueError(
+                f"memory_type must be 'swiglu' or 'linear', got {memory_type!r}"
+            )
+        if memory_type == "linear" and fw_share_proj:
+            raise ValueError("linear memory currently requires private projections")
+        self.memory_type = memory_type
         self.fw_share_proj = fw_share_proj
         self.fw_share_init = fw_share_init
         self.clip_state_grad_ratio = clip_state_grad_ratio
@@ -517,20 +697,36 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             raise ValueError(f"Unsupported LACT inference state mode: {lact_inference_state_mode!r}")
         self.lact_inference_state_mode = lact_inference_state_mode
         self.memory_norm = nn.RMSNorm(hidden_dim, eps=fw_norm_epsilon)
-        self.memory = FastWeightSwiGLU(
-            hidden_dim,
-            inter_multi=fw_inter_multi,
-            num_heads=fw_num_heads,
-            share_proj=fw_share_proj,
-            norm_epsilon=fw_norm_epsilon,
-            inner_optim=inner_optim,
-            clip_ns_grad_ratio=clip_ns_grad_ratio,
-            recompute_ns5_backward=recompute_ns5_backward,
-        )
+        if memory_type == "linear":
+            self.memory = FastWeightLinear(
+                hidden_dim,
+                num_heads=fw_num_heads,
+                inner_optim=inner_optim,
+                norm_epsilon=fw_norm_epsilon,
+                clip_ns_grad_ratio=clip_ns_grad_ratio,
+                recompute_ns5_backward=recompute_ns5_backward,
+            )
+        else:
+            self.memory = FastWeightSwiGLU(
+                hidden_dim,
+                inter_multi=fw_inter_multi,
+                num_heads=fw_num_heads,
+                share_proj=fw_share_proj,
+                norm_epsilon=fw_norm_epsilon,
+                inner_optim=inner_optim,
+                clip_ns_grad_ratio=clip_ns_grad_ratio,
+                recompute_ns5_backward=recompute_ns5_backward,
+            )
         self.value_proj = None if fw_share_proj else nn.Linear(hidden_dim, hidden_dim, bias=False)
         self.memory_gate = nn.Parameter(torch.zeros(hidden_dim))
-        self.lr_proj = nn.Linear(hidden_dim, 3, bias=False)
-        self.base_lr_inverse = inverse_softplus(fw_base_lr)
+        if memory_type == "linear":
+            self.lr_proj = None
+            self.beta_proj = nn.Linear(hidden_dim, fw_num_heads, bias=False)
+            self.base_lr_inverse = inverse_sigmoid(fw_base_lr)
+        else:
+            self.lr_proj = nn.Linear(hidden_dim, 3, bias=False)
+            self.beta_proj = None
+            self.base_lr_inverse = inverse_softplus(fw_base_lr)
         self.muon_update_steps = fw_muon_update_steps
         self.reset_lact_parameters()
 
@@ -540,7 +736,10 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         if getattr(self.memory_norm, "bias", None) is not None:
             nn.init.zeros_(self.memory_norm.bias)
         self.memory.reset_parameters()
-        nn.init.trunc_normal_(self.lr_proj.weight, std=0.02)
+        if self.lr_proj is not None:
+            nn.init.trunc_normal_(self.lr_proj.weight, std=0.02)
+        if self.beta_proj is not None:
+            nn.init.trunc_normal_(self.beta_proj.weight, std=0.02)
         nn.init.zeros_(self.memory_gate)
         if self.value_proj is not None:
             nn.init.trunc_normal_(self.value_proj.weight, std=0.02)
@@ -552,7 +751,14 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             self.memory.output_proj.weight.copy_(self.wo.weight.detach())
 
     def init_fast_weights(self, batch_size: int):
+        if self.memory_type != "swiglu":
+            raise RuntimeError("init_fast_weights only applies to SwiGLU memory")
         return self.memory.init_fast_weights(batch_size)
+
+    def init_linear_state(self, batch_size: int) -> torch.Tensor:
+        if self.memory_type != "linear":
+            raise RuntimeError("init_linear_state only applies to linear memory")
+        return self.memory.init_state(batch_size)
 
     def _shared_qkv(self, memory_input: torch.Tensor):
         query, key, value = self.wqkv(memory_input).chunk(3, dim=-1)
@@ -594,6 +800,8 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         fast_weights,
         master_weights,
     ):
+        if self.memory_type != "swiglu":
+            raise RuntimeError("update_fast_weights only applies to SwiGLU memory")
         prediction_input = F.rms_norm(
             memory_input,
             normalized_shape=(memory_input.shape[-1],),
@@ -616,12 +824,92 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             self.muon_update_steps,
         )
 
+    def update_linear_state(
+        self,
+        memory_input: torch.Tensor,
+        state: torch.Tensor,
+    ) -> torch.Tensor:
+        if self.memory_type != "linear":
+            raise RuntimeError("update_linear_state only applies to linear memory")
+        prediction_input = F.rms_norm(
+            memory_input,
+            normalized_shape=(memory_input.shape[-1],),
+            eps=1e-5,
+        )
+        target = self.value_proj(prediction_input)
+        with torch.autocast(device_type=memory_input.device.type, enabled=False):
+            learning_rates = torch.sigmoid(
+                F.linear(
+                    prediction_input.float(),
+                    self.beta_proj.weight.float(),
+                )
+                + self.base_lr_inverse
+            )
+        return self.memory.update(
+            memory_input,
+            target,
+            learning_rates,
+            state,
+            self.muon_update_steps,
+        )
+
+    def _forward_linear_memory_scan(
+        self,
+        hidden_states: torch.Tensor,
+        clip_slices: list[tuple[int, int]],
+        video_clip_counts: list[int],
+    ) -> torch.Tensor:
+        outputs = []
+        clip_index = 0
+        reset_state = self.lact_inference_state_mode == "reset_state"
+        if reset_state and self.training:
+            raise RuntimeError("reset_state is an inference-only LACT state mode")
+        for clip_count in video_clip_counts:
+            state = self.init_linear_state(batch_size=1)
+            for video_clip_index in range(clip_count):
+                will_update = not reset_state and video_clip_index + 1 < clip_count
+                state_ratio_context = None
+                if will_update and self.clip_state_grad_ratio:
+                    state_ratio_context = _StateGradRatioContext()
+                    group_state = _BoundPreviousLinearStateGradient.apply(
+                        state,
+                        state_ratio_context,
+                    )
+                else:
+                    group_state = state
+                start, end = clip_slices[clip_index]
+                clip_hidden = hidden_states[start:end].unsqueeze(0)
+                clip_hidden, memory_input, _, _ = self.apply_memory(
+                    clip_hidden,
+                    group_state,
+                )
+                if will_update:
+                    state = self.update_linear_state(memory_input, group_state)
+                    if state_ratio_context is not None:
+                        state = _CaptureNextLinearStateGradient.apply(
+                            state,
+                            state_ratio_context,
+                        )
+                outputs.append(clip_hidden.squeeze(0))
+                clip_index += 1
+        if clip_index != len(clip_slices):
+            raise ValueError(
+                f"Consumed {clip_index} clips, but layout contains {len(clip_slices)}"
+            )
+        return torch.cat(outputs, dim=0)
+
     def forward_memory_scan(
         self,
         hidden_states: torch.Tensor,
         clip_slices: list[tuple[int, int]],
         video_clip_counts: list[int],
     ) -> torch.Tensor:
+        if self.memory_type == "linear":
+            return self._forward_linear_memory_scan(
+                hidden_states,
+                clip_slices,
+                video_clip_counts,
+            )
         if self.lact_inference_state_mode == "reset_state":
             if self.training:
                 raise RuntimeError("reset_state is an inference-only LACT state mode")
@@ -764,6 +1052,7 @@ class VideoChat3LACTVisionModel(VideoChat3VisionPreTrainedModel):
                 "fw_num_heads": config.fw_num_heads,
                 "fw_base_lr": config.fw_base_lr,
                 "fw_muon_update_steps": config.fw_muon_update_steps,
+                "memory_type": config.memory_type,
                 "inner_optim": config.inner_optim,
                 "fw_share_proj": config.fw_share_proj,
                 "fw_share_init": config.fw_share_init,
