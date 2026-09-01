@@ -6,6 +6,7 @@ from typing import Any
 
 LACT_CONFIG_NAME = "configuration_videochat3_lact.py"
 LACT_MODELING_NAME = "modeling_videochat3_lact.py"
+LACT_PROCESSING_NAME = "processing_videochat3_lact.py"
 
 
 def export_lact_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
@@ -21,6 +22,7 @@ def export_lact_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
     auto_map = config.setdefault("auto_map", {})
     auto_map.update(
         {
+            "AutoProcessor": "processing_videochat3_lact.VideoChat3LACTProcessor",
             "AutoConfig": ("configuration_videochat3_lact.VideoChat3LACTConfig"),
             "AutoModel": "modeling_videochat3_lact.VideoChat3LACTForConditionalGeneration",
             "AutoModelForCausalLM": ("modeling_videochat3_lact.VideoChat3LACTForConditionalGeneration"),
@@ -39,6 +41,7 @@ def export_lact_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
         "merge_kernel_size",
         "temporal_patch_size",
         "temporal_merge_size",
+        "macro_temporal_compression_factor",
         "init_pos_emb_height",
         "init_pos_emb_width",
         "fw_inter_multi",
@@ -50,6 +53,7 @@ def export_lact_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
         "fw_norm_epsilon",
         "clip_ns_grad_ratio",
         "clip_state_grad_ratio",
+        "lact_inference_state_mode",
     )
     hf_vision_config = config.setdefault("vision_config", {})
     hf_vision_config["model_type"] = "videochat3_lact_vision"
@@ -73,8 +77,25 @@ def export_lact_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
     temporary_config_path.write_text(json.dumps(config, indent=2, ensure_ascii=False) + "\n")
     temporary_config_path.replace(config_path)
 
+    processor_config_path = hf_dir / "processor_config.json"
+    if not processor_config_path.is_file():
+        raise FileNotFoundError(f"Missing Hugging Face processor config: {processor_config_path}")
+    processor_config = json.loads(processor_config_path.read_text())
+    processor_config["processor_class"] = "VideoChat3LACTProcessor"
+    processor_config["macro_temporal_compression_factor"] = (
+        vision_config.macro_temporal_compression_factor
+    )
+    processor_config.setdefault("auto_map", {})["AutoProcessor"] = (
+        "processing_videochat3_lact.VideoChat3LACTProcessor"
+    )
+    temporary_processor_config_path = processor_config_path.with_suffix(".json.tmp")
+    temporary_processor_config_path.write_text(
+        json.dumps(processor_config, indent=2, ensure_ascii=False) + "\n"
+    )
+    temporary_processor_config_path.replace(processor_config_path)
+
     source_dir = Path(__file__).parent
-    for file_name in (LACT_CONFIG_NAME, LACT_MODELING_NAME):
+    for file_name in (LACT_CONFIG_NAME, LACT_MODELING_NAME, LACT_PROCESSING_NAME):
         shutil.copy2(source_dir / file_name, hf_dir / file_name)
 
 

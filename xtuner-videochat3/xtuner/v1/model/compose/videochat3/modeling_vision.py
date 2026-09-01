@@ -47,6 +47,8 @@ from xtuner.v1.ops.others import Dropout
 from xtuner.v1.ops.act_fn import get_act_fn
 from xtuner.v1.utils import get_logger
 
+from .macro_temporal import compress_chunk_outputs, video_clip_counts
+
 DEVICE = get_device()
 DEVICE_MODULE = get_torch_device_module()
 logger = get_logger()
@@ -649,6 +651,10 @@ class VideoChat3VisionModel(BaseModel):
         num_tokens = 0
         import copy
         old_grid_thws = copy.deepcopy(grid_thws)
+        per_video_clip_counts = video_clip_counts(
+            old_grid_thws,
+            self.config.temporal_merge_size,
+        )
         for t, h, w in grid_thws.tolist():
             num_tokens += t * h * w
         grid_thws = self.split_grid_thws_clip_by_clip(grid_thws)
@@ -658,8 +664,17 @@ class VideoChat3VisionModel(BaseModel):
         assert num_tokens == num_tokens2, f"{num_tokens} != {num_tokens2}, {old_grid_thws} / {grid_thws}"
         hidden_states = self.patch_embed(pixel_values, grid_thws)
         hidden_states = self.encoder(hidden_states, grid_thws)
-        hidden_states = patch_merger(hidden_states, grid_thws, merge_kernel_size=self.config.merge_kernel_size)
-        return hidden_states
+        chunk_outputs = patch_merger(
+            hidden_states,
+            grid_thws,
+            merge_kernel_size=self.config.merge_kernel_size,
+        )
+        return compress_chunk_outputs(
+            chunk_outputs,
+            per_video_clip_counts,
+            self.config.macro_temporal_compression_factor,
+            mode="mean",
+        )
 
     def to_hf_key_list(self, key: str) -> list[str]:
         return [self._hf_prefix + key]

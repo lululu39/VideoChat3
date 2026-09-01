@@ -19,6 +19,8 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         fw_norm_epsilon: float = 1e-5,
         clip_ns_grad_ratio: bool = True,
         clip_state_grad_ratio: bool = True,
+        macro_temporal_compression_factor: int = 1,
+        lact_inference_state_mode: str = "continuous",
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
@@ -40,6 +42,16 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
             raise ValueError("fw_muon_update_steps must be non-negative")
         if fw_norm_epsilon <= 0:
             raise ValueError("fw_norm_epsilon must be positive")
+        if macro_temporal_compression_factor not in (1, 2, 4, 8):
+            raise ValueError(
+                "macro_temporal_compression_factor must be one of (1, 2, 4, 8), "
+                f"got {macro_temporal_compression_factor}"
+            )
+        if lact_inference_state_mode not in ("continuous", "reset_state"):
+            raise ValueError(
+                "lact_inference_state_mode must be 'continuous' or 'reset_state', "
+                f"got {lact_inference_state_mode!r}"
+            )
         self.fw_inter_multi = fw_inter_multi
         self.fw_num_heads = fw_num_heads
         self.fw_base_lr = fw_base_lr
@@ -49,6 +61,8 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         self.fw_norm_epsilon = fw_norm_epsilon
         self.clip_ns_grad_ratio = clip_ns_grad_ratio
         self.clip_state_grad_ratio = clip_state_grad_ratio
+        self.macro_temporal_compression_factor = macro_temporal_compression_factor
+        self.lact_inference_state_mode = lact_inference_state_mode
 
 
 class VideoChat3LACTConfig(VideoChat3Config):

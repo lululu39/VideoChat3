@@ -15,6 +15,7 @@ from .modeling_vision import (
     VideoChat3VisionPatchEmbed,
     patch_merger,
 )
+from .macro_temporal import compress_chunk_outputs
 from .videochat3_config import VideoChat3LACTVisionConfig
 
 
@@ -408,6 +409,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         fw_norm_epsilon: float = 1e-5,
         clip_ns_grad_ratio: bool = True,
         clip_state_grad_ratio: bool = True,
+        lact_inference_state_mode: str = "continuous",
     ):
         super().__init__(
             num_heads=num_heads,
@@ -424,6 +426,12 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         self.fw_share_proj = fw_share_proj
         self.fw_share_init = fw_share_init
         self.clip_state_grad_ratio = clip_state_grad_ratio
+        if lact_inference_state_mode not in ("continuous", "reset_state"):
+            raise ValueError(
+                "lact_inference_state_mode must be 'continuous' or 'reset_state', "
+                f"got {lact_inference_state_mode!r}"
+            )
+        self.lact_inference_state_mode = lact_inference_state_mode
         self.memory_norm = nn.RMSNorm(hidden_dim, eps=fw_norm_epsilon)
         self.memory = FastWeightSwiGLU(
             hidden_dim,
@@ -529,6 +537,25 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         clip_slices: list[tuple[int, int]],
         video_clip_counts: list[int],
     ) -> torch.Tensor:
+        if self.lact_inference_state_mode == "reset_state":
+            if self.training:
+                raise RuntimeError("reset_state is an inference-only LACT state mode")
+            outputs = []
+            clip_index = 0
+            for clip_count in video_clip_counts:
+                for _ in range(clip_count):
+                    fast_weights, _ = self.init_fast_weights(batch_size=1)
+                    start, end = clip_slices[clip_index]
+                    clip_hidden = hidden_states[start:end].unsqueeze(0)
+                    clip_hidden, _, _, _ = self.apply_memory(clip_hidden, fast_weights)
+                    outputs.append(clip_hidden.squeeze(0))
+                    clip_index += 1
+            if clip_index != len(clip_slices):
+                raise ValueError(
+                    f"Consumed {clip_index} clips, but layout contains {len(clip_slices)}"
+                )
+            return torch.cat(outputs, dim=0)
+
         outputs = []
         clip_index = 0
         for clip_count in video_clip_counts:
@@ -659,6 +686,7 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
                 "fw_norm_epsilon": config.fw_norm_epsilon,
                 "clip_ns_grad_ratio": config.clip_ns_grad_ratio,
                 "clip_state_grad_ratio": config.clip_state_grad_ratio,
+                "lact_inference_state_mode": config.lact_inference_state_mode,
             },
         )
         self._hf_prefix = "model.vision_tower."
@@ -747,8 +775,22 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
             raise ValueError(f"Split grid changed token count: {expected_tokens} != {actual_tokens}")
         hidden_states = self.patch_embed(pixel_values, split_grid_thws)
         hidden_states = self.encoder(hidden_states, split_grid_thws, video_clip_counts)
-        return patch_merger(
+        chunk_outputs = patch_merger(
             hidden_states,
             split_grid_thws,
             merge_kernel_size=self.config.merge_kernel_size,
         )
+        return compress_chunk_outputs(
+            chunk_outputs,
+            video_clip_counts,
+            self.config.macro_temporal_compression_factor,
+            mode="select_last",
+        )
+
+    def set_lact_inference_state_mode(self, mode: str) -> None:
+        """Switch between continuous and per-chunk-reset FW state at inference."""
+        if mode not in ("continuous", "reset_state"):
+            raise ValueError(f"Unsupported LACT inference state mode: {mode!r}")
+        self.config.lact_inference_state_mode = mode
+        for block in self.encoder.blocks:
+            block.lact_inference_state_mode = mode

@@ -41,6 +41,9 @@ cache_dir = Path(
         "dataset_cache/cache_videochat3_4B_lact_stage3",
     )
 )
+macro_temporal_compression_factor = int(
+    os.getenv("VIDEOCHAT3_MACRO_TEMPORAL_COMPRESSION_FACTOR", "1")
+)
 
 model_cfg = VideoChat3LACTDense4BConfig(
     train_lact_only=env_bool("VIDEOCHAT3_TRAIN_LACT_ONLY"),
@@ -49,6 +52,7 @@ model_cfg = VideoChat3LACTDense4BConfig(
         attn_impl="flash_attention_2",
         clip_ns_grad_ratio=True,
         clip_state_grad_ratio=True,
+        macro_temporal_compression_factor=macro_temporal_compression_factor,
     )
 )
 
@@ -131,6 +135,7 @@ for name, data in dataset_collections.items():
                 video_sample_fps=data.get("video_sample_fps", 2),
                 video_read_type=data.get("video_read_type"),
                 video_frame_multiple=data.get("video_frame_multiple", 1),
+                macro_temporal_compression_factor=macro_temporal_compression_factor,
                 processor_path=str(model_path),
                 data_augment=data.get("data_augment", False),
                 system_message=data.get("system_message"),

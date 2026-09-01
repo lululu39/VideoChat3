@@ -8,7 +8,7 @@ import math
 import torch
 import numpy as np
 from PIL import Image
-from typing import Union
+from typing import Literal, Union
 try:
     from petrel_client.client import Client
 except ImportError:
@@ -21,6 +21,12 @@ from .video_utils import VideoChat3VideoMetadata, VIDEO_READER_MAP
 from xtuner.v1.data_proto.messages import ChatMessages
 from xtuner.v1.data_proto.templates import CHAT_TEMPLATE_MAP
 from xtuner.v1.utils import get_logger
+from xtuner.v1.model.compose.videochat3.macro_temporal import (
+    compress_timestamps,
+    macro_clip_count,
+    macro_video_token_count,
+    validate_macro_temporal_compression_factor,
+)
 
 from ..data_item import CacheItem, VideoChat3DataItem
 from ..utils import apply_exif_orientation
@@ -223,6 +229,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
         video_sample_fps: Union[int, float] = 2,  # Sample fps for video
         video_read_type: str | None = None,
         video_frame_multiple: int = 1,
+        macro_temporal_compression_factor: int = 1,
         system_message: str | None = None,
         add_vision_id: bool = False,
         max_length: int | None = None,
@@ -257,6 +264,9 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
                 f"video_frame_multiple must be positive, got {video_frame_multiple}"
             )
         self.video_frame_multiple = video_frame_multiple
+        self.macro_temporal_compression_factor = validate_macro_temporal_compression_factor(
+            macro_temporal_compression_factor
+        )
 
         self.add_vision_id = add_vision_id
     
@@ -268,7 +278,9 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             f"[{self.data_name}] image_min_pixels: {self.image_processor.min_pixels}, image_max_pixels: {self.image_processor.max_pixels},"
             f"video_max_total_pixels: {self.video_max_total_pixels}, frame_min_pixels: {frame_min_pixels}, frame_max_pixels: {frame_max_pixels},"
             f"video_min_frames: {video_min_frames}, video_max_frames: {video_max_frames}, fixed_num_sampled_frames: {fixed_num_sampled_frames}, video_sample_fps: {video_sample_fps},"
-            f"video_read_type: {self.video_read_type}, video_frame_multiple: {self.video_frame_multiple}, add_vision_id: {self.add_vision_id}, "
+            f"video_read_type: {self.video_read_type}, video_frame_multiple: {self.video_frame_multiple}, "
+            f"macro_temporal_compression_factor: {self.macro_temporal_compression_factor}, "
+            f"add_vision_id: {self.add_vision_id}, "
             f"spatial_merge_length: {self.spatial_merge_length}, temporal_merge_length: {self.temporal_merge_length}"
         )
 
@@ -292,6 +304,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             f"{video_sample_fps}_"
             f"{self.video_read_type}_"
             f"{self.video_frame_multiple}_"
+            f"{self.macro_temporal_compression_factor}_"
             f"{self.add_vision_id}_"
             f"{self.spatial_merge_length}_"
             f"{self.temporal_merge_length}_"
@@ -495,6 +508,10 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
                             for _ in range(video_cnt):
                                 
                                 curr_timestamp = self.media_processor._calculate_timestamps(self._video_meta_list[current_video_idx], self.video_processor.temporal_merge_size)
+                                curr_timestamp = compress_timestamps(
+                                    curr_timestamp,
+                                    self.macro_temporal_compression_factor,
+                                )
                                 video_tokens = ""
                                 frame_seqlen = video_grid_thw[current_video_idx][1:].prod() // merge_length
                                 for curr_time in curr_timestamp:
@@ -512,6 +529,23 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
         # if current_video_idx < num_video, it means <video> placeholder is less than num_video
         assert current_video_idx == len(self._video_meta_list), (
             f"ERROR: current_video_idx: {current_video_idx} != num_video: {len(self._video_meta_list)}"
+        )
+
+    def _get_number_of_video_tokens(self, grid_thw) -> int:
+        grid_t, grid_h, grid_w = (int(value) for value in grid_thw)
+        if self.macro_temporal_compression_factor == 1:
+            return int(
+                self.video_processor.get_number_of_video_tokens(
+                    grid_t,
+                    grid_h,
+                    grid_w,
+                )
+            )
+        return macro_video_token_count(
+            (grid_t, grid_h, grid_w),
+            temporal_merge_size=self.video_processor.temporal_merge_size,
+            spatial_merge_size=self.video_processor.merge_size,
+            factor=self.macro_temporal_compression_factor,
         )
 
     def pure_text_get_item(self, data_item: dict) -> VideoChat3DataItem:
@@ -642,7 +676,9 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
                 frame_multiple=self.video_frame_multiple,
             )
             media_grid_thw.append([grid_t, grid_h, grid_w])
-            num_video_tokens_list.append(self.video_processor.get_number_of_video_tokens(grid_t, grid_h, grid_w))
+            num_video_tokens_list.append(
+                self._get_number_of_video_tokens((grid_t, grid_h, grid_w))
+            )
         media_grid_thw = torch.tensor(media_grid_thw, dtype=torch.int).reshape(-1, 3)  # type: ignore
         try:
             messages = ChatMessages(messages=data_item["messages"])
@@ -680,7 +716,9 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             grid_thw_copy = [grid_thw_copy]
             grid_thw = [grid_thw]
 
-        num_video_tokens_list = [self.video_processor.get_number_of_video_tokens(grid_t, grid_h, grid_w) for grid_t, grid_h, grid_w in grid_thw_copy]  # type: ignore
+        num_video_tokens_list = [
+            self._get_number_of_video_tokens(_thw) for _thw in grid_thw_copy
+        ]
         messages = ChatMessages(messages=data_item["messages"])
         self._replace_video_token(messages, grid_thw_copy, add_vision_id=self.add_vision_id)  # type: ignore
         tokenized = messages.tokenize(self.tokenizer, self.chat_template)
@@ -700,10 +738,13 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
 
         num_img_tokens = 0
         for num_video_token, _thw in zip(num_video_tokens_list, grid_thw_copy):
-            if _thw[0].item() % self.video_processor.temporal_merge_size == 0:
-                num_clips = _thw[0].item() // self.video_processor.temporal_merge_size
-            else:
-                num_clips = _thw[0].item() // self.video_processor.temporal_merge_size + 1
+            original_clips = (
+                int(_thw[0].item()) + self.video_processor.temporal_merge_size - 1
+            ) // self.video_processor.temporal_merge_size
+            num_clips = macro_clip_count(
+                original_clips,
+                self.macro_temporal_compression_factor,
+            )
             num_img_tokens += num_video_token +  num_clips * 2
         
 
@@ -733,6 +774,7 @@ class VideoChat3TokenizeFnConfig(BaseMLLMTokenizeFnConfig):
     video_sample_fps: Union[int, float] = 2 
     video_read_type: str | None = None
     video_frame_multiple: int = 1
+    macro_temporal_compression_factor: Literal[1, 2, 4, 8] = 1
     # When handling multiple images, it's helpful to add labels to the images and videos for better reference.
     add_vision_id: bool = False
 
@@ -753,6 +795,7 @@ class VideoChat3TokenizeFnConfig(BaseMLLMTokenizeFnConfig):
             video_sample_fps=self.video_sample_fps,
             video_read_type=self.video_read_type,
             video_frame_multiple=self.video_frame_multiple,
+            macro_temporal_compression_factor=self.macro_temporal_compression_factor,
             video_max_total_pixels=self.video_max_total_pixels,
             add_vision_id=self.add_vision_id,
             max_length=self.max_length,
