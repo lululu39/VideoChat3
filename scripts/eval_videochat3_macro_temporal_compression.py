@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import importlib
 import json
 import random
@@ -19,7 +20,6 @@ from eval_videochat3_lact_teacher_forced_ablation import (
     append_jsonl,
     atomic_json_dump,
     bootstrap_ci,
-    build_messages,
     distributed_context,
     frame_index,
     load_completed_keys,
@@ -46,6 +46,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--frame-root", type=Path, required=True)
     parser.add_argument("--video-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--dataset-format",
+        choices=("videomme", "mvbench"),
+        default="videomme",
+    )
+    parser.add_argument("--nframes", type=int, default=64)
     parser.add_argument("--max-videos", type=int, default=96)
     parser.add_argument("--max-questions-per-video", type=int, default=3)
     parser.add_argument("--seed", type=int, default=42)
@@ -54,6 +60,44 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-pixels", type=int, default=448 * 448)
     parser.add_argument("--total-pixels", type=int, default=80_000 * 2 * 4 * 14 * 14)
     return parser.parse_args()
+
+
+def build_messages(row: pd.Series, video_item: dict, dataset_format: str) -> list[dict]:
+    candidates = ast.literal_eval(row["candidates"])
+    if dataset_format == "mvbench":
+        candidates = [f"{chr(ord('A') + index)}. {candidate}" for index, candidate in enumerate(candidates)]
+    question = str(row["question"]) + "\n" + "\n".join(candidates)
+    prompt = f"Question: {question}\nAnswer: "
+    return [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": ""},
+                video_item,
+                {
+                    "type": "text",
+                    "text": (
+                        "\nThese are the frames of a video. Select the best answer to the following "
+                        "multiple-choice question based on the video. Respond with only the letter "
+                        "(A, B, C, or D) of the correct option.\n"
+                    ),
+                },
+                {"type": "text", "text": prompt},
+            ],
+        }
+    ]
+
+
+def correct_answer(row: pd.Series, dataset_format: str) -> str:
+    answer = str(row["answer"]).strip()
+    if dataset_format == "videomme":
+        return answer
+    candidates = ast.literal_eval(row["candidates"])
+    try:
+        answer_index = candidates.index(answer)
+    except ValueError as error:
+        raise ValueError(f"MVBench answer {answer!r} is absent from candidates={candidates}") from error
+    return chr(ord("A") + answer_index)
 
 
 def expand_macro_video_placeholder(
@@ -282,9 +326,20 @@ def main() -> None:
 
     annotations = pd.read_excel(args.annotation_xlsx)
     required_columns = {"index", "video", "question", "candidates", "answer"}
+    if args.dataset_format == "mvbench":
+        required_columns.add("prefix")
     if not required_columns.issubset(annotations.columns):
         raise ValueError(f"Missing columns: {required_columns - set(annotations.columns)}")
-    grouped = {video: frame.copy() for video, frame in annotations.groupby("video", sort=True)}
+    if args.dataset_format == "mvbench":
+        annotations = annotations.copy()
+        annotations["video_key"] = annotations["prefix"].str.rstrip("/") + "/" + annotations["video"]
+        group_column = "video_key"
+    else:
+        group_column = "video"
+    grouped = {
+        video: frame.copy()
+        for video, frame in annotations.groupby(group_column, sort=True)
+    }
     videos = sorted(grouped)
     rng = random.Random(args.seed)
     rng.shuffle(videos)
@@ -304,6 +359,8 @@ def main() -> None:
         "selected_videos": len(videos),
         "selected_questions": selected_questions,
         "world_size": world_size,
+        "dataset_format": args.dataset_format,
+        "nframes": args.nframes if args.dataset_format == "mvbench" else None,
         "factors": list(FACTORS),
         "base_compression": (
             "mean identical spatial positions over R consecutive post-final-layernorm, "
@@ -342,21 +399,38 @@ def main() -> None:
         ]
         if not missing_rows:
             continue
-        frame_dir = args.frame_root / video
-        frame_paths = sorted(frame_dir.glob("*.jpg"), key=frame_index)
-        if not frame_paths:
-            raise FileNotFoundError(f"No cached frames for {video}: {frame_dir}")
-        media_path = args.video_root / f"{video}.mp4"
-        duration = video_duration(media_path)
-        sample_fps = len(frame_paths) / duration
-        video_item = video_content(
-            frame_paths,
-            sample_fps,
-            args.min_pixels,
-            args.max_pixels,
-            args.total_pixels,
+        if args.dataset_format == "videomme":
+            frame_dir = args.frame_root / video
+            frame_paths = sorted(frame_dir.glob("*.jpg"), key=frame_index)
+            if not frame_paths:
+                raise FileNotFoundError(f"No cached frames for {video}: {frame_dir}")
+            media_path = args.video_root / f"{video}.mp4"
+            duration = video_duration(media_path)
+            sample_fps = len(frame_paths) / duration
+            video_item = video_content(
+                frame_paths,
+                sample_fps,
+                args.min_pixels,
+                args.max_pixels,
+                args.total_pixels,
+            )
+        else:
+            media_path = args.video_root / video
+            if not media_path.is_file():
+                raise FileNotFoundError(f"Missing MVBench media: {media_path}")
+            video_item = {
+                "type": "video",
+                "video": f"file://{media_path}",
+                "nframes": args.nframes,
+                "min_pixels": args.min_pixels,
+                "max_pixels": args.max_pixels,
+                "total_pixels": args.total_pixels,
+            }
+        vision_messages = build_messages(
+            missing_rows[0],
+            video_item,
+            args.dataset_format,
         )
-        vision_messages = build_messages(missing_rows[0], video_item)
         _, videos_and_metadata, video_kwargs = process_vision_info(
             vision_messages,
             image_patch_size=processor.image_processor.patch_size,
@@ -412,8 +486,8 @@ def main() -> None:
                 )
 
         for row in missing_rows:
-            answer = str(row["answer"]).strip()
-            messages = build_messages(row, video_item)
+            answer = correct_answer(row, args.dataset_format)
+            messages = build_messages(row, video_item, args.dataset_format)
             legacy_tokenized, legacy_prompt_length, legacy_answer_ids = tokenize_question(
                 processor,
                 messages,
@@ -468,7 +542,7 @@ def main() -> None:
                 "index": int(row["index"]),
                 "video": video,
                 "answer": answer,
-                "frames": len(frame_paths),
+                "frames": int(grid_thw[0, 0].item()),
                 "grid_thw": [int(value) for value in grid_thw[0].tolist()],
                 "parity": {
                     "projected_features_bitwise_equal": feature_parity,
