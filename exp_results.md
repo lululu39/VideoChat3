@@ -513,7 +513,7 @@ Real 8xH100 FSDP/TimeLens smokes validate both linear variants and initializatio
 
 ## v12 - Linear16 + Delta R4, No FW Ratio Clip, TimeLens Random Half
 
-**Status:** Prepared for a clean 8K FSDP restart. The retired 2K precursor stopped at step 189/455 and is not resumed; its step-100 DCP remains diagnostic-only.
+**Status:** Running cleanly from initialization at step 1/93. The retired 2K precursor stopped at step 189/455 and is not resumed; its step-100 DCP remains diagnostic-only.
 
 - Objective: test whether chunk-level Linear+Delta avoids the `inf` recurrent gradient seen at step 3 for unclipped SwiGLU+Muon, while measuring end-to-end learning behavior rather than only systems speed.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; all original Base tensors load unchanged, the linear private Q/K/V/O branch is rebuilt by attention share-init, each per-video/per-layer linear state starts at zero, and every residual memory gate starts at zero.
@@ -526,6 +526,8 @@ Real 8xH100 FSDP/TimeLens smokes validate both linear variants and initializatio
 - Training W&B: [`v12`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-nofwclip-v12).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_FWProj_train_timelens_r4_v12.sh`.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-nofwclip-v12/<timestamp>/hf-93`.
+
+Startup validation: all ranks loaded the intended `143.0M` Linear-FW plus `33.0M` projector scope with original ViT/LM frozen, group 1, no FW ratio clip, and no resume. Step 1 has global CE `0.627007`, finite pre-clip global norm `2.8850`, and the expected zero first warmup LR. The largest rank reports `66.49 GB` allocated / `69.13 GB` reserved; there is no OOM, NaN, invalid norm, or skipped step. Rank times are `193.62-243.90s`, including `56.65-106.92s` data wait, for an initial ETA of roughly 5-6 hours. Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-nofwclip-v12/20260901230616`; native log: `torchrun_logs/training_20260901_230558_datava270000004.log`.
 
 ### Retired 2K Precursor
 
