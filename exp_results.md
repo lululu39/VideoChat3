@@ -397,7 +397,7 @@ Conclusion: larger positive FW amplitude does not recover hidden utility. `alpha
 
 ## v9 - TimeLens-100K Visual Grounding, v4 FW-Only Recipe
 
-**Status:** Prepared for launch.
+**Status:** Training in progress; startup validated through step 3/834.
 
 - Objective: isolate whether v4 failed because LongVid supervision was contaminated and weakly vision-dependent. Change only the training data/task to clean temporal grounding while restoring the exact v4 initialization, trainable scope, optimizer, clipping, batch, packing, and epoch settings.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; no v4-v8 checkpoint reuse. All 27 memory gates start at zero and every original Base tensor is bitwise unchanged.
@@ -406,9 +406,11 @@ Conclusion: larger positive FW amplitude does not recover hidden utility. `alpha
 - Trainable scope: exactly the v4 358,473,600 LACT-added parameters, including FW bases, private Q/K/V/O projections, memory gates, LR projections, value projection, and memory normalization. Original ViT, multimodal projector, and LM remain frozen.
 - Optimizer and schedule: all LACT parameters, including gates, use one uniform v4 LR group with peak `2e-5`, minimum `1e-6`, 3% warmup, cosine decay, weight decay 0, and one epoch. No gate-specific LR or original-ViT group exists.
 - Stabilization: unchanged `clip_ns_grad_ratio=True` and `clip_state_grad_ratio=True` at rho 1, plus the original XTuner true-global gradient norm clip at 1.0.
-- Hardware and packing: 8xH100, global batch 16, 8K sample/pack length, four-frame LACT groups, and the TimeLens official visual recipe adapted to VideoChat3: 2 FPS, 64-448 uniformly sampled frames rounded to a multiple of four, with total-pixel budget 14,680,064. The maximum recurrent horizon is 112 clips / 111 effective updates.
+- Hardware and packing: 8xH100, global batch 16, 8K sample/pack length, four-frame LACT groups, and the TimeLens official visual recipe adapted to VideoChat3: 2 FPS, 64-448 uniformly sampled frames rounded to a multiple of four, with total-pixel budget 14,680,064. The maximum recurrent horizon is 112 clips / 111 effective updates. Deterministic caching packs the 25,247 source rows into 13,335 samples for 834 optimizer steps.
 - Preflight: all 25,247 samples pass cache estimation with mean/P95/max sequence lengths `3,454/5,305/5,662`, no row exceeds 8K, and total estimated tokens are 87,201,115 (10,644.7 ideal 8K packs). A real 498.9-second sample decoded 448 frames and matched cache/runtime at 4,766 tokens with 18 supervised answer tokens.
 - Training W&B: [`v9`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-fw4-fwonly-timelens-vis25247-8xh100-gb16-video2fps-f448-s8k-fwlr2e5-ns5r1-stgr1-v9).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FW_train_timelens_v9.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-timelens-vis25247-8xh100-gb16-video2fps-f448-s8k-fwlr2e5-ns5r1-stgr1-v9/<timestamp>/hf-<final-step>`.
+- Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-timelens-vis25247-8xh100-gb16-video2fps-f448-s8k-fwlr2e5-ns5r1-stgr1-v9/20260901001820`.
+- Startup validation: all ranks loaded the expected TimeLens manifest, global batch 16 / accumulation 2, and the same v4 LACT-only optimizer scope at `2e-5`; original projector and LM remained frozen. Public W&B authenticated as `yibozhong657 (LVSM-Experiment)`. Steps 1-3 had global CE `0.51013/0.49965/0.39626`, finite pre-clip norms `3.5078/0.5572/0.7536`, the expected warmup LR `0/8e-7/1.6e-6`, and maximum allocated memory about `46.15 GB`. Source H.264 streams emitted recoverable decoder warnings during first-batch prefetch, but every rank completed forward/backward with no media error, NaN, or OOM. Stable steps 2-3 took `93.03/89.84` seconds, giving an initial completion estimate of 22-24 hours.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-timelens-vis25247-8xh100-gb16-video2fps-f448-s8k-fwlr2e5-ns5r1-stgr1-v9/20260901001820/hf-834`.
 - Planned completion checks: final HF checkpoint, gate/FW deltas against zero-gate initialization, original ViT/LM/projector integrity, loss/gradient/clipping behavior, TimeLens-held-out grounding evaluation, and the fixed core regression suite.
