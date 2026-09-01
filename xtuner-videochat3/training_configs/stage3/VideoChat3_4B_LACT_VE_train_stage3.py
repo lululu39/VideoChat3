@@ -230,8 +230,16 @@ trainer = TrainerConfig(
                     "fw-window-4",
                     f"memory-{model_cfg.vision_config.memory_type}",
                     f"inner-{model_cfg.vision_config.inner_optim}",
-                    "ns5-exact-backward",
-                    "ns5-backward-recompute",
+                    (
+                        "ns5-exact-backward"
+                        if model_cfg.vision_config.inner_optim == "muon"
+                        else "raw-delta-update"
+                    ),
+                    (
+                        "ns5-backward-recompute"
+                        if model_cfg.vision_config.inner_optim == "muon"
+                        else "no-ns5"
+                    ),
                     (
                         "state-ratio-clip-rho1"
                         if model_cfg.vision_config.clip_state_grad_ratio
