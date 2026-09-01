@@ -59,6 +59,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
     fw_num_heads: int = 1
     fw_base_lr: float = 0.01
     fw_muon_update_steps: int = 5
+    inner_optim: Literal["muon", "sgd"] = "muon"
     fw_share_proj: bool = False
     fw_share_init: bool = True
     fw_norm_epsilon: float = 1e-5

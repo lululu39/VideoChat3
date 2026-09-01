@@ -14,6 +14,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         fw_num_heads: int = 1,
         fw_base_lr: float = 0.01,
         fw_muon_update_steps: int = 5,
+        inner_optim: str = "muon",
         fw_share_proj: bool = False,
         fw_share_init: bool = True,
         fw_norm_epsilon: float = 1e-5,
@@ -42,6 +43,10 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
             raise ValueError("fw_base_lr must be positive")
         if fw_muon_update_steps < 0:
             raise ValueError("fw_muon_update_steps must be non-negative")
+        if inner_optim not in ("muon", "sgd"):
+            raise ValueError(
+                f"inner_optim must be 'muon' or 'sgd', got {inner_optim!r}"
+            )
         if fw_norm_epsilon <= 0:
             raise ValueError("fw_norm_epsilon must be positive")
         if fw_update_layer_group_size <= 0:
@@ -60,6 +65,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         self.fw_num_heads = fw_num_heads
         self.fw_base_lr = fw_base_lr
         self.fw_muon_update_steps = fw_muon_update_steps
+        self.inner_optim = inner_optim
         self.fw_share_proj = fw_share_proj
         self.fw_share_init = fw_share_init
         self.fw_norm_epsilon = fw_norm_epsilon

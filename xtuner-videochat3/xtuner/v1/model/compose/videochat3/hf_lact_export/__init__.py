@@ -48,6 +48,7 @@ def export_lact_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
         "fw_num_heads",
         "fw_base_lr",
         "fw_muon_update_steps",
+        "inner_optim",
         "fw_share_proj",
         "fw_share_init",
         "fw_norm_epsilon",

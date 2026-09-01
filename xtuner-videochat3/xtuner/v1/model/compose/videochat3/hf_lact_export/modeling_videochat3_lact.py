@@ -269,6 +269,7 @@ class FastWeightSwiGLU(nn.Module):
         num_heads: int = 1,
         share_proj: bool = False,
         norm_epsilon: float = 1e-5,
+        inner_optim: str = "muon",
         clip_ns_grad_ratio: bool = False,
         recompute_ns5_backward: bool = True,
     ):
@@ -279,11 +280,16 @@ class FastWeightSwiGLU(nn.Module):
             raise ValueError(f"dim={dim} must be divisible by num_heads={num_heads}")
         if inter_multi <= 0:
             raise ValueError(f"inter_multi must be positive, got {inter_multi}")
+        if inner_optim not in ("muon", "sgd"):
+            raise ValueError(
+                f"inner_optim must be 'muon' or 'sgd', got {inner_optim!r}"
+            )
         self.dim = dim
         self.num_heads = num_heads
         self.head_dim = dim // num_heads
         self.hidden_dim = int(dim * inter_multi)
         self.share_proj = share_proj
+        self.inner_optim = inner_optim
         self.clip_ns_grad_ratio = clip_ns_grad_ratio
         self.recompute_ns5_backward = recompute_ns5_backward
 
@@ -431,30 +437,37 @@ class FastWeightSwiGLU(nn.Module):
         )
         w1_grad = w1_grad_transposed.transpose(-1, -2)
 
-        transpose_w02 = self.head_dim > self.hidden_dim
-        if transpose_w02:
-            muon_gradients = torch.stack(
-                (
-                    w0_grad.transpose(-1, -2),
-                    w1_grad,
-                    w2_grad.transpose(-1, -2),
+        if self.inner_optim == "sgd":
+            w0_update = w0_grad
+            w1_update = w1_grad
+            w2_update = w2_grad
+        else:
+            transpose_w02 = self.head_dim > self.hidden_dim
+            if transpose_w02:
+                muon_gradients = torch.stack(
+                    (
+                        w0_grad.transpose(-1, -2),
+                        w1_grad,
+                        w2_grad.transpose(-1, -2),
+                    )
                 )
-            )
-        else:
-            muon_gradients = torch.stack((w0_grad, w1_grad.transpose(-1, -2), w2_grad))
-        muon_updates = zeropower_via_newtonschulz5(
-            muon_gradients.flatten(0, 2),
-            muon_update_steps,
-            clip_ns_grad_ratio=self.clip_ns_grad_ratio,
-            recompute_ns5_backward=self.recompute_ns5_backward,
-        ).reshape_as(muon_gradients)
-        w0_update, w1_update_oriented, w2_update = muon_updates.unbind(0)
-        if transpose_w02:
-            w0_update = w0_update.transpose(-1, -2)
-            w1_update = w1_update_oriented
-            w2_update = w2_update.transpose(-1, -2)
-        else:
-            w1_update = w1_update_oriented.transpose(-1, -2)
+            else:
+                muon_gradients = torch.stack(
+                    (w0_grad, w1_grad.transpose(-1, -2), w2_grad)
+                )
+            muon_updates = zeropower_via_newtonschulz5(
+                muon_gradients.flatten(0, 2),
+                muon_update_steps,
+                clip_ns_grad_ratio=self.clip_ns_grad_ratio,
+                recompute_ns5_backward=self.recompute_ns5_backward,
+            ).reshape_as(muon_gradients)
+            w0_update, w1_update_oriented, w2_update = muon_updates.unbind(0)
+            if transpose_w02:
+                w0_update = w0_update.transpose(-1, -2)
+                w1_update = w1_update_oriented
+                w2_update = w2_update.transpose(-1, -2)
+            else:
+                w1_update = w1_update_oriented.transpose(-1, -2)
         master_weights = (
             master_w0 + w0_update.to(master_w0.dtype),
             master_w1 + w1_update.to(master_w1.dtype),
@@ -480,6 +493,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         fw_num_heads: int = 1,
         fw_base_lr: float = 0.01,
         fw_muon_update_steps: int = 5,
+        inner_optim: str = "muon",
         fw_share_proj: bool = False,
         fw_share_init: bool = True,
         fw_norm_epsilon: float = 1e-5,
@@ -509,6 +523,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             num_heads=fw_num_heads,
             share_proj=fw_share_proj,
             norm_epsilon=fw_norm_epsilon,
+            inner_optim=inner_optim,
             clip_ns_grad_ratio=clip_ns_grad_ratio,
             recompute_ns5_backward=recompute_ns5_backward,
         )
@@ -749,6 +764,7 @@ class VideoChat3LACTVisionModel(VideoChat3VisionPreTrainedModel):
                 "fw_num_heads": config.fw_num_heads,
                 "fw_base_lr": config.fw_base_lr,
                 "fw_muon_update_steps": config.fw_muon_update_steps,
+                "inner_optim": config.inner_optim,
                 "fw_share_proj": config.fw_share_proj,
                 "fw_share_init": config.fw_share_init,
                 "fw_norm_epsilon": config.fw_norm_epsilon,
