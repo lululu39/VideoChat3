@@ -19,16 +19,6 @@
       "max_pixels": 200704,
       "total_pixels": 125440000
     },
-    "Video-MME_long_2fps_limit_1024_448px_80kctx": {
-      "class": "VideoMME",
-      "dataset": "Video-MME",
-      "fps": 2.0,
-      "duration_filter": "long",
-      "frames_limit": 1024,
-      "min_pixels": 784,
-      "max_pixels": 200704,
-      "total_pixels": 125440000
-    },
     "MVBench_MP4_64frame": {
       "class": "MVBench_MP4",
       "dataset": "MVBench_MP4",
