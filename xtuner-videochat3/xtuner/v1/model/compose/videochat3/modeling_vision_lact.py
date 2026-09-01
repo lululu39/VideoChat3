@@ -4,6 +4,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import torch.utils.checkpoint as checkpoint
 from typing_extensions import override
 
 from transformers.activations import ACT2FN
@@ -187,7 +188,7 @@ def zeropower_via_newtonschulz5(
     matrix: torch.Tensor,
     steps: int = 5,
     *,
-    clip_ns_grad_ratio: bool = True,
+    clip_ns_grad_ratio: bool = False,
 ) -> torch.Tensor:
     """VideoLACT NS5 with an optional non-expansive local backward."""
     if steps == 0 or not clip_ns_grad_ratio or not matrix.requires_grad:
@@ -205,7 +206,7 @@ class FastWeightSwiGLU(nn.Module):
         num_heads: int = 1,
         share_proj: bool = False,
         norm_epsilon: float = 1e-5,
-        clip_ns_grad_ratio: bool = True,
+        clip_ns_grad_ratio: bool = False,
     ):
         super().__init__()
         if num_heads <= 0:
@@ -407,7 +408,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         fw_share_proj: bool = False,
         fw_share_init: bool = True,
         fw_norm_epsilon: float = 1e-5,
-        clip_ns_grad_ratio: bool = True,
+        clip_ns_grad_ratio: bool = False,
         clip_state_grad_ratio: bool = True,
         lact_inference_state_mode: str = "continuous",
     ):
@@ -531,6 +532,43 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             self.muon_update_steps,
         )
 
+    @torch.compile(dynamic=True)
+    def _compiled_apply_memory_chunk(
+        self,
+        hidden_states: torch.Tensor,
+        fast_w0: torch.Tensor,
+        fast_w1: torch.Tensor,
+        fast_w2: torch.Tensor,
+    ):
+        return self.apply_memory(hidden_states, (fast_w0, fast_w1, fast_w2))
+
+    def apply_memory_chunk(self, hidden_states: torch.Tensor, fast_weights):
+        if hidden_states.is_cuda:
+            return self._compiled_apply_memory_chunk(
+                hidden_states,
+                *fast_weights,
+            )
+        return self.apply_memory(hidden_states, fast_weights)
+
+    def update_fast_weights_chunk(
+        self,
+        memory_input: torch.Tensor,
+        key: torch.Tensor,
+        target: torch.Tensor,
+        fast_weights,
+        master_weights,
+    ):
+        # Inductor's compiled 1152-wide NS5 update is slower than eager
+        # cuBLAS on H100. Cross-layer mode still compiles the genuinely
+        # batched update; layer-major mode keeps this large GEMM path eager.
+        return self.update_fast_weights(
+            memory_input,
+            key,
+            target,
+            fast_weights,
+            master_weights,
+        )
+
     def forward_memory_scan(
         self,
         hidden_states: torch.Tensor,
@@ -547,7 +585,10 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                     fast_weights, _ = self.init_fast_weights(batch_size=1)
                     start, end = clip_slices[clip_index]
                     clip_hidden = hidden_states[start:end].unsqueeze(0)
-                    clip_hidden, _, _, _ = self.apply_memory(clip_hidden, fast_weights)
+                    clip_hidden, _, _, _ = self.apply_memory_chunk(
+                        clip_hidden,
+                        fast_weights,
+                    )
                     outputs.append(clip_hidden.squeeze(0))
                     clip_index += 1
             if clip_index != len(clip_slices):
@@ -577,12 +618,12 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                     group_master_weights = master_weights
                 start, end = clip_slices[clip_index]
                 clip_hidden = hidden_states[start:end].unsqueeze(0)
-                clip_hidden, memory_input, key, target = self.apply_memory(
+                clip_hidden, memory_input, key, target = self.apply_memory_chunk(
                     clip_hidden,
                     group_fast_weights,
                 )
                 if will_update:
-                    fast_weights, master_weights = self.update_fast_weights(
+                    fast_weights, master_weights = self.update_fast_weights_chunk(
                         memory_input,
                         key,
                         target,
@@ -603,14 +644,66 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             raise ValueError(f"Consumed {clip_index} clips, but layout contains {len(clip_slices)}")
         return torch.cat(outputs, dim=0)
 
+    def _forward_chunk(
+        self,
+        hidden_states: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        rope_freqs_cis: torch.Tensor,
+        fast_w0: torch.Tensor,
+        fast_w1: torch.Tensor,
+        fast_w2: torch.Tensor,
+    ):
+        """Apply one layer to one temporal chunk without updating FW state."""
+        hidden_states = self.forward_attention(
+            hidden_states,
+            cu_seqlens,
+            rope_freqs_cis,
+        )
+        hidden_states, memory_input, key, target = self.apply_memory_chunk(
+            hidden_states.unsqueeze(0),
+            (fast_w0, fast_w1, fast_w2),
+        )
+        hidden_states = hidden_states.squeeze(0)
+        residual = hidden_states
+        hidden_states = self.mlp(self.norm1(hidden_states))
+        hidden_states = residual + hidden_states
+        return hidden_states, memory_input, key, target
+
+    def forward_chunk(
+        self,
+        hidden_states: torch.Tensor,
+        cu_seqlens: torch.Tensor,
+        rope_freqs_cis: torch.Tensor,
+        fast_weights,
+    ):
+        args = (hidden_states, cu_seqlens, rope_freqs_cis, *fast_weights)
+        # Compiling FlashAttention together with the large slow MLP regresses
+        # the real 1152-wide model. The memory apply inside remains compiled.
+        return self._forward_chunk(*args)
+
     def forward(
         self,
         hidden_states: torch.Tensor,
         cu_seqlens: torch.Tensor,
         rope_freqs_cis: torch.Tensor,
-        clip_slices: list[tuple[int, int]],
-        video_clip_counts: list[int],
-    ) -> torch.Tensor:
+        clip_slices: list[tuple[int, int]] | None = None,
+        video_clip_counts: list[int] | None = None,
+        chunk_fast_weights: tuple[
+            torch.Tensor,
+            torch.Tensor,
+            torch.Tensor,
+        ]
+        | None = None,
+    ) -> torch.Tensor | tuple[torch.Tensor, ...]:
+        if chunk_fast_weights is not None:
+            return self.forward_chunk(
+                hidden_states,
+                cu_seqlens,
+                rope_freqs_cis,
+                chunk_fast_weights,
+            )
+        if clip_slices is None or video_clip_counts is None:
+            raise ValueError("Full LACT layer forward requires clip layout")
         hidden_states = self.forward_attention(hidden_states, cu_seqlens, rope_freqs_cis)
         hidden_states = self.forward_memory_scan(hidden_states, clip_slices, video_clip_counts)
         residual = hidden_states
@@ -619,13 +712,323 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
 
 
 class VideoChat3LACTVisionEncoder(nn.Module):
-    def __init__(self, hidden_dim: int, num_layers: int, block_cfg: dict):
+    def __init__(
+        self,
+        hidden_dim: int,
+        num_layers: int,
+        block_cfg: dict,
+        fw_update_layer_group_size: int = 1,
+    ):
         super().__init__()
         from .modeling_vision import Rope2DPosEmb
 
         self.rope_2d = Rope2DPosEmb(block_cfg["hidden_dim"] // block_cfg["num_heads"], 512, 512)
         self.blocks = nn.ModuleList([VideoChat3LACTVisionLayer(**block_cfg) for _ in range(num_layers)])
         self.final_layernorm = nn.LayerNorm(hidden_dim)
+        self.fw_update_layer_group_size = int(fw_update_layer_group_size)
+        if self.fw_update_layer_group_size <= 0:
+            raise ValueError("fw_update_layer_group_size must be positive")
+
+    @staticmethod
+    def _unwrap_layer(layer):
+        while hasattr(layer, "_checkpoint_wrapped_module"):
+            layer = layer._checkpoint_wrapped_module
+        return layer
+
+    def _batched_update_fast_weights(
+        self,
+        memory,
+        memory_inputs,
+        keys,
+        targets,
+        fast_w0,
+        fast_w1,
+        fast_w2,
+        master_w0,
+        master_w1,
+        master_w2,
+        lr_weights,
+        update_weights,
+        value_weights,
+        base_lr_inverse: float,
+        share_proj: bool,
+        muon_update_steps: int,
+    ):
+        num_layers, batch_size, seq_len, hidden_dim = memory_inputs.shape
+        prediction_input = F.rms_norm(
+            memory_inputs,
+            normalized_shape=(hidden_dim,),
+            eps=1e-5,
+        )
+        if share_proj:
+            update_inputs = keys
+            update_targets = targets
+        else:
+            update_inputs = torch.einsum(
+                "lbtd,lod->lbto",
+                memory_inputs,
+                update_weights,
+            )
+            update_inputs = F.rms_norm(
+                F.silu(update_inputs),
+                normalized_shape=(hidden_dim,),
+                eps=1e-5,
+            )
+            update_targets = torch.einsum(
+                "lbtd,lod->lbto",
+                prediction_input,
+                value_weights,
+            )
+        learning_rates = F.softplus(
+            torch.einsum(
+                "lbtd,lod->lbto",
+                prediction_input.float(),
+                lr_weights.float(),
+            )
+            + base_lr_inverse
+        )
+        flat_fast_weights = tuple(
+            weight.flatten(0, 1) for weight in (fast_w0, fast_w1, fast_w2)
+        )
+        flat_master_weights = tuple(
+            weight.flatten(0, 1)
+            for weight in (master_w0, master_w1, master_w2)
+        )
+        fast_weights, master_weights = memory.update_preprojected(
+            update_inputs.flatten(0, 1),
+            update_targets.flatten(0, 1),
+            learning_rates.flatten(0, 1),
+            flat_fast_weights,
+            flat_master_weights,
+            muon_update_steps,
+        )
+        fast_weights = tuple(
+            weight.reshape(num_layers, batch_size, *weight.shape[1:])
+            for weight in fast_weights
+        )
+        master_weights = tuple(
+            weight.reshape(num_layers, batch_size, *weight.shape[1:])
+            for weight in master_weights
+        )
+        return (*fast_weights, *master_weights)
+
+    @torch.compile(dynamic=True)
+    def _compiled_batched_update_fast_weights(self, *args):
+        return self._batched_update_fast_weights(*args)
+
+    @torch.compile(dynamic=True)
+    def _compiled_checkpoint_batched_update_fast_weights(self, *args):
+        return checkpoint.checkpoint(
+            self._batched_update_fast_weights,
+            *args,
+            preserve_rng_state=False,
+            use_reentrant=False,
+        )
+
+    def _update_layer_group(
+        self,
+        layers,
+        update_records,
+        fast_weights,
+        master_weights,
+        update_parameters,
+        use_checkpoint: bool,
+    ):
+        memory_inputs = torch.stack([record[0] for record in update_records])
+        share_proj = layers[0].fw_share_proj
+        if share_proj:
+            keys = torch.stack([record[1] for record in update_records])
+            targets = torch.stack([record[2] for record in update_records])
+        else:
+            keys = memory_inputs.new_empty(len(layers), 0, 0, 0)
+            targets = memory_inputs.new_empty(len(layers), 0, 0, 0)
+        lr_weights, update_weights, value_weights = update_parameters
+        args = (
+            layers[0].memory,
+            memory_inputs,
+            keys,
+            targets,
+            *fast_weights,
+            *master_weights,
+            lr_weights,
+            update_weights,
+            value_weights,
+            layers[0].base_lr_inverse,
+            share_proj,
+            layers[0].muon_update_steps,
+        )
+        full_group = len(layers) == self.fw_update_layer_group_size
+        if use_checkpoint and memory_inputs.is_cuda and full_group:
+            outputs = self._compiled_checkpoint_batched_update_fast_weights(*args)
+        elif use_checkpoint:
+            outputs = checkpoint.checkpoint(
+                self._batched_update_fast_weights,
+                *args,
+                preserve_rng_state=False,
+                use_reentrant=False,
+            )
+        elif memory_inputs.is_cuda and full_group:
+            outputs = self._compiled_batched_update_fast_weights(*args)
+        else:
+            outputs = self._batched_update_fast_weights(*args)
+        return outputs[:3], outputs[3:]
+
+    @staticmethod
+    def _stack_update_parameters(layers, reference):
+        lr_weights = torch.stack([layer.lr_proj.weight for layer in layers])
+        if layers[0].fw_share_proj:
+            update_weights = reference.new_empty(len(layers), 0, 0)
+            value_weights = reference.new_empty(len(layers), 0, 0)
+        else:
+            update_weights = torch.stack(
+                [layer.memory.update_proj[0].weight for layer in layers]
+            )
+            value_weights = torch.stack(
+                [layer.value_proj.weight for layer in layers]
+            )
+        return lr_weights, update_weights, value_weights
+
+    def _forward_cross_layer_groups(
+        self,
+        hidden_states: torch.Tensor,
+        rope_freqs_cis: torch.Tensor,
+        clip_slices: list[tuple[int, int]],
+        video_clip_counts: list[int],
+    ) -> torch.Tensor:
+        # FSDP parameters must be materialized before FW bases and private
+        # projection weights are stacked across layers. The matching FSDP
+        # setup keeps them unsharded through forward and reshares in backward.
+        for block in self.blocks:
+            if hasattr(block, "unshard"):
+                block.unshard()
+
+        clip_cu_seqlens = [
+            torch.tensor(
+                [0, end - start],
+                device=hidden_states.device,
+                dtype=torch.int32,
+            )
+            for start, end in clip_slices
+        ]
+        for layer_start in range(
+            0,
+            len(self.blocks),
+            self.fw_update_layer_group_size,
+        ):
+            layer_end = min(
+                layer_start + self.fw_update_layer_group_size,
+                len(self.blocks),
+            )
+            wrapped_layers = self.blocks[layer_start:layer_end]
+            layers = [self._unwrap_layer(layer) for layer in wrapped_layers]
+            update_parameters = self._stack_update_parameters(
+                layers,
+                hidden_states,
+            )
+            use_checkpoint = self.training and torch.is_grad_enabled()
+            reset_state = layers[0].lact_inference_state_mode == "reset_state"
+            if reset_state and self.training:
+                raise RuntimeError("reset_state is an inference-only LACT state mode")
+            group_outputs = []
+            clip_index = 0
+            for clip_count in video_clip_counts:
+                layer_states = []
+                for layer in layers:
+                    fast_weights, master_weights = layer.init_fast_weights(1)
+                    layer_states.append(
+                        {
+                            "fast_weights": fast_weights,
+                            "master_weights": master_weights,
+                        }
+                    )
+                for video_clip_index in range(clip_count):
+                    will_update = (
+                        not reset_state and video_clip_index + 1 < clip_count
+                    )
+                    start, end = clip_slices[clip_index]
+                    chunk_hidden = hidden_states[start:end]
+                    chunk_rope = rope_freqs_cis[start:end]
+                    update_records = []
+                    ratio_contexts = []
+                    apply_fast_weights = []
+                    apply_master_weights = []
+                    for state, layer in zip(layer_states, layers):
+                        if will_update and layer.clip_state_grad_ratio:
+                            ratio_context = _StateGradRatioContext()
+                            bounded_state = _BoundPreviousStateGradient.apply(
+                                *state["fast_weights"],
+                                *state["master_weights"],
+                                ratio_context,
+                            )
+                            group_fast_weights = bounded_state[:3]
+                            group_master_weights = bounded_state[3:]
+                        else:
+                            ratio_context = None
+                            group_fast_weights = state["fast_weights"]
+                            group_master_weights = state["master_weights"]
+                        ratio_contexts.append(ratio_context)
+                        apply_fast_weights.append(group_fast_weights)
+                        apply_master_weights.append(group_master_weights)
+
+                    for wrapped_layer, fast_weights in zip(
+                        wrapped_layers,
+                        apply_fast_weights,
+                    ):
+                        chunk_hidden, memory_input, key, target = wrapped_layer(
+                            chunk_hidden,
+                            clip_cu_seqlens[clip_index],
+                            chunk_rope,
+                            chunk_fast_weights=fast_weights,
+                        )
+                        update_records.append((memory_input, key, target))
+
+                    if will_update:
+                        stacked_fast_weights = tuple(
+                            torch.stack(
+                                [weights[index] for weights in apply_fast_weights]
+                            )
+                            for index in range(3)
+                        )
+                        stacked_master_weights = tuple(
+                            torch.stack(
+                                [weights[index] for weights in apply_master_weights]
+                            )
+                            for index in range(3)
+                        )
+                        new_fast_weights, new_master_weights = self._update_layer_group(
+                            layers,
+                            update_records,
+                            stacked_fast_weights,
+                            stacked_master_weights,
+                            update_parameters,
+                            use_checkpoint,
+                        )
+                        for index, state in enumerate(layer_states):
+                            fast_weights = tuple(
+                                weight[index] for weight in new_fast_weights
+                            )
+                            master_weights = tuple(
+                                weight[index] for weight in new_master_weights
+                            )
+                            ratio_context = ratio_contexts[index]
+                            if ratio_context is not None:
+                                captured_state = _CaptureNextStateGradient.apply(
+                                    *fast_weights,
+                                    *master_weights,
+                                    ratio_context,
+                                )
+                                fast_weights = captured_state[:3]
+                                master_weights = captured_state[3:]
+                            state["fast_weights"] = fast_weights
+                            state["master_weights"] = master_weights
+                    group_outputs.append(chunk_hidden)
+                    clip_index += 1
+            if clip_index != len(clip_slices):
+                raise ValueError(
+                    f"Consumed {clip_index} clips, but layout contains {len(clip_slices)}"
+                )
+            hidden_states = torch.cat(group_outputs, dim=0)
+        return hidden_states
 
     def forward(
         self,
@@ -643,10 +1046,18 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         if sum(video_clip_counts) != len(clip_slices):
             raise ValueError(f"video_clip_counts={video_clip_counts} do not cover {len(clip_slices)} clips")
 
-        for block in self.blocks:
-            hidden_states = block(
+        if self.fw_update_layer_group_size == 1:
+            for block in self.blocks:
+                hidden_states = block(
+                    hidden_states,
+                    cu_seqlens,
+                    rope_freqs_cis,
+                    clip_slices,
+                    video_clip_counts,
+                )
+        else:
+            hidden_states = self._forward_cross_layer_groups(
                 hidden_states,
-                cu_seqlens,
                 rope_freqs_cis,
                 clip_slices,
                 video_clip_counts,
@@ -670,6 +1081,7 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
         self.encoder = VideoChat3LACTVisionEncoder(
             hidden_dim=config.hidden_size,
             num_layers=config.num_hidden_layers,
+            fw_update_layer_group_size=config.fw_update_layer_group_size,
             block_cfg={
                 "num_heads": config.num_attention_heads,
                 "hidden_dim": config.hidden_size,

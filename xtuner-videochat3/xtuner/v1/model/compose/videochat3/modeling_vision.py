@@ -720,6 +720,9 @@ class VideoChat3VisionModel(BaseModel):
         shuffled_layers_idxs = torch.randperm(len(self.encoder.blocks), generator=generator)
 
 
+        cross_layer_lact = (
+            getattr(self.config, "fw_update_layer_group_size", 1) > 1
+        )
         for layer_idx in tqdm(shuffled_layers_idxs, desc="[Vision Fully Shard]"):
             layer = self.encoder.blocks[layer_idx]
 
@@ -734,7 +737,11 @@ class VideoChat3VisionModel(BaseModel):
                 layer,
                 mesh=self.fsdp_mesh,
                 mp_policy=mp_policy,
-                reshard_after_forward=True,
+                # Cross-layer LACT stacks parameters from several blocks for
+                # one batched FW update, so every block must remain
+                # materialized until the vision forward finishes. The root
+                # module reshards them at the end of forward/backward.
+                reshard_after_forward=not cross_layer_lact,
                 offload_policy=CPUOffloadPolicy()
                 if fsdp_config.cpu_offload
                 else None,

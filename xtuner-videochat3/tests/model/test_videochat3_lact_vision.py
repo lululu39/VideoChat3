@@ -168,7 +168,10 @@ def test_ns5_ratio_clip_supports_checkpoint_recomputation():
     for use_reentrant in (True, False):
         matrix = (torch.randn(2, 4, 6) * 1e-3).requires_grad_(True)
         update = checkpoint(
-            zeropower_via_newtonschulz5,
+            lambda value: zeropower_via_newtonschulz5(
+                value,
+                clip_ns_grad_ratio=True,
+            ),
             matrix,
             use_reentrant=use_reentrant,
         )
@@ -387,9 +390,9 @@ def test_lact_config_builds_separate_vision_model():
     model.init_weights()
     assert config.model_type == "videochat3_lact_vision"
     assert isinstance(model, VideoChat3VisionLACTModel)
-    assert config.clip_ns_grad_ratio is True
+    assert config.clip_ns_grad_ratio is False
     assert config.clip_state_grad_ratio is True
-    assert all(block.memory.clip_ns_grad_ratio is True for block in model.encoder.blocks)
+    assert all(block.memory.clip_ns_grad_ratio is False for block in model.encoder.blocks)
     assert all(block.clip_state_grad_ratio is True for block in model.encoder.blocks)
     assert all(block.memory_gate.shape == (16,) for block in model.encoder.blocks)
     assert all(torch.count_nonzero(block.memory_gate).item() == 0 for block in model.encoder.blocks)

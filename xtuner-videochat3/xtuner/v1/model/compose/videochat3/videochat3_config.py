@@ -62,8 +62,9 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
     fw_share_proj: bool = False
     fw_share_init: bool = True
     fw_norm_epsilon: float = 1e-5
-    clip_ns_grad_ratio: bool = True
+    clip_ns_grad_ratio: bool = False
     clip_state_grad_ratio: bool = True
+    fw_update_layer_group_size: int = 1
     lact_inference_state_mode: Literal["continuous", "reset_state"] = "continuous"
 
     def model_post_init(self, __context: Any) -> None:
@@ -93,6 +94,8 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
             raise ValueError("fw_muon_update_steps must be non-negative")
         if self.fw_norm_epsilon <= 0:
             raise ValueError("fw_norm_epsilon must be positive")
+        if self.fw_update_layer_group_size <= 0:
+            raise ValueError("fw_update_layer_group_size must be positive")
 
     def build(self):
         from .modeling_vision_lact import VideoChat3VisionLACTModel

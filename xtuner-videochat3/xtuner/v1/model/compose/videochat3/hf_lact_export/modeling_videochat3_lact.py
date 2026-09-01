@@ -217,7 +217,7 @@ def zeropower_via_newtonschulz5(
     matrix: torch.Tensor,
     steps: int = 5,
     *,
-    clip_ns_grad_ratio: bool = True,
+    clip_ns_grad_ratio: bool = False,
 ) -> torch.Tensor:
     """VideoLACT NS5 with an optional non-expansive local backward."""
     if steps == 0 or not clip_ns_grad_ratio or not matrix.requires_grad:
@@ -235,7 +235,7 @@ class FastWeightSwiGLU(nn.Module):
         num_heads: int = 1,
         share_proj: bool = False,
         norm_epsilon: float = 1e-5,
-        clip_ns_grad_ratio: bool = True,
+        clip_ns_grad_ratio: bool = False,
     ):
         super().__init__()
         if num_heads <= 0:
@@ -446,7 +446,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         fw_share_proj: bool = False,
         fw_share_init: bool = True,
         fw_norm_epsilon: float = 1e-5,
-        clip_ns_grad_ratio: bool = True,
+        clip_ns_grad_ratio: bool = False,
         clip_state_grad_ratio: bool = True,
         lact_inference_state_mode: str = "continuous",
     ):

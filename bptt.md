@@ -416,7 +416,7 @@ $$
 模型选项为：
 
 ```python
-clip_ns_grad_ratio = True  # 默认启用
+clip_ns_grad_ratio = False  # 历史复现开关；新实验默认关闭
 ```
 
 NS5 forward 完全不变：

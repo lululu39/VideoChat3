@@ -57,8 +57,11 @@ if model_variant == "lact":
         freeze_projector=not train_projector,
         vision_config=VideoChat3LACTVisionConfig(
             attn_impl="flash_attention_2",
-            clip_ns_grad_ratio=True,
+            clip_ns_grad_ratio=False,
             clip_state_grad_ratio=True,
+            fw_update_layer_group_size=int(
+                os.getenv("VIDEOCHAT3_FW_UPDATE_LAYER_GROUP_SIZE", "1")
+            ),
             macro_temporal_compression_factor=macro_temporal_compression_factor,
         ),
     )
@@ -218,8 +221,9 @@ trainer = TrainerConfig(
                     "lact",
                     "fast-weight",
                     "fw-window-4",
-                    "ns5-ratio-clip-rho1",
+                    "ns5-exact-backward",
                     "state-ratio-clip-rho1",
+                    f"fw-layer-batch-{model_cfg.vision_config.fw_update_layer_group_size}",
                     (
                         "fw-projector"
                         if train_projector
