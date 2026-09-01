@@ -754,10 +754,19 @@ class VideoChat3VisionModel(BaseModel):
         cross_layer_lact = (
             getattr(self.config, "fw_update_layer_group_size", 1) > 1
         )
+        linear_cross_layer = (
+            cross_layer_lact
+            and getattr(self.config, "memory_type", None) == "linear"
+        )
+        if linear_cross_layer:
+            self.encoder.cross_layer_checkpoint = num_recompute_layers > 0
+            self.encoder.checkpoint_preserve_rng_state = (
+                checkpoint_preserve_rng_state
+            )
         for layer_idx in tqdm(shuffled_layers_idxs, desc="[Vision Fully Shard]"):
             layer = self.encoder.blocks[layer_idx]
 
-            if layer_idx < num_recompute_layers:
+            if layer_idx < num_recompute_layers and not linear_cross_layer:
                 layer = checkpoint_wrapper(layer, 
                                         preserve_rng_state=checkpoint_preserve_rng_state,
                                         checkpoint_impl=checkpoint_impl)

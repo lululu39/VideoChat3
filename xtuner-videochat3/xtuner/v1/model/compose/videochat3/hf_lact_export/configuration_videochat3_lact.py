@@ -59,10 +59,6 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
             raise ValueError("fw_norm_epsilon must be positive")
         if fw_update_layer_group_size <= 0:
             raise ValueError("fw_update_layer_group_size must be positive")
-        if memory_type == "linear" and fw_update_layer_group_size != 1:
-            raise ValueError(
-                "linear memory currently requires fw_update_layer_group_size=1"
-            )
         if macro_temporal_compression_factor not in (1, 2, 4, 8):
             raise ValueError(
                 "macro_temporal_compression_factor must be one of (1, 2, 4, 8), "
