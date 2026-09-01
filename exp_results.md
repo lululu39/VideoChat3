@@ -394,3 +394,21 @@ Native artifacts: `/mnt/localssd/VideoChat3/eval/v4-fw-residual-alpha-sweep`. Al
 | `alpha=2` - `alpha=-2` | `-0.32738` | `[-0.49756, -0.16461]` |
 
 Conclusion: larger positive FW amplitude does not recover hidden utility. `alpha=0/0.5/1/2` is statistically flat, with point estimates monotonically worsening as positive amplitude grows; `alpha=4` causes a large, significant collapse. Thus v4 is not limited by a gate that is simply too small. At equal `9.54%` feature divergence, however, `alpha=2` is decisively better than `alpha=-2`, so the learned residual is not sign-symmetric random noise and contains directional structure. The precise conclusion is a weak directional residual that provides no measurable benefit over Base, not an under-amplified useful residual. Together with the equal-budget random perturbation result, this also shows that downstream sensitivity depends strongly on feature direction: arbitrary 15% noise is mostly ignored, while extrapolating the learned v4 direction to 19% is highly destructive.
+
+## v9 - TimeLens-100K Visual Grounding, v4 FW-Only Recipe
+
+**Status:** Prepared for launch.
+
+- Objective: isolate whether v4 failed because LongVid supervision was contaminated and weakly vision-dependent. Change only the training data/task to clean temporal grounding while restoring the exact v4 initialization, trainable scope, optimizer, clipping, batch, packing, and epoch settings.
+- Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; no v4-v8 checkpoint reuse. All 27 memory gates start at zero and every original Base tensor is bitwise unchanged.
+- Data: `TencentARC/TimeLens-100K` revision `75e03f54a19b814de6dc8f5fceb19090625f4844`, converted through `/mnt/localssd/dataset/VideoChat3/TimeLens-100K/TimeLens100K_Visual_SFT30K_VideoChat3.json`. The manifest contains 25,247 timestamp-grounding events over 13,790 videos after the documented pure-video speech/audio filter, media-duration validation, and official seed-42 nine-duration-bucket selection. Every media path resolves to one of 19,466 extracted MP4s.
+- Supervision: reproduce the official TimeLens grounding prompt and generate `The event happens in <start> - <end> seconds.` targets. Unlike LongVid count/self-copy answers, the timestamp response is typically multi-token and directly tied to visual event localization.
+- Trainable scope: exactly the v4 358,473,600 LACT-added parameters, including FW bases, private Q/K/V/O projections, memory gates, LR projections, value projection, and memory normalization. Original ViT, multimodal projector, and LM remain frozen.
+- Optimizer and schedule: all LACT parameters, including gates, use one uniform v4 LR group with peak `2e-5`, minimum `1e-6`, 3% warmup, cosine decay, weight decay 0, and one epoch. No gate-specific LR or original-ViT group exists.
+- Stabilization: unchanged `clip_ns_grad_ratio=True` and `clip_state_grad_ratio=True` at rho 1, plus the original XTuner true-global gradient norm clip at 1.0.
+- Hardware and packing: 8xH100, global batch 16, 8K sample/pack length, four-frame LACT groups, and the TimeLens official visual recipe adapted to VideoChat3: 2 FPS, 64-448 uniformly sampled frames rounded to a multiple of four, with total-pixel budget 14,680,064. The maximum recurrent horizon is 112 clips / 111 effective updates.
+- Preflight: all 25,247 samples pass cache estimation with mean/P95/max sequence lengths `3,454/5,305/5,662`, no row exceeds 8K, and total estimated tokens are 87,201,115 (10,644.7 ideal 8K packs). A real 498.9-second sample decoded 448 frames and matched cache/runtime at 4,766 tokens with 18 supervised answer tokens.
+- Training W&B: [`v9`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-fw4-fwonly-timelens-vis25247-8xh100-gb16-video2fps-f448-s8k-fwlr2e5-ns5r1-stgr1-v9).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FW_train_timelens_v9.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-timelens-vis25247-8xh100-gb16-video2fps-f448-s8k-fwlr2e5-ns5r1-stgr1-v9/<timestamp>/hf-<final-step>`.
+- Planned completion checks: final HF checkpoint, gate/FW deltas against zero-gate initialization, original ViT/LM/projector integrity, loss/gradient/clipping behavior, TimeLens-held-out grounding evaluation, and the fixed core regression suite.
