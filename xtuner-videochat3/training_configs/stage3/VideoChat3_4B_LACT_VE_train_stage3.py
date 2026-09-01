@@ -60,7 +60,10 @@ if model_variant == "lact":
             inner_optim=os.getenv("VIDEOCHAT3_INNER_OPTIM", "muon"),
             clip_ns_grad_ratio=False,
             recompute_ns5_backward=True,
-            clip_state_grad_ratio=True,
+            clip_state_grad_ratio=env_bool(
+                "VIDEOCHAT3_CLIP_STATE_GRAD_RATIO",
+                True,
+            ),
             fw_update_layer_group_size=int(
                 os.getenv("VIDEOCHAT3_FW_UPDATE_LAYER_GROUP_SIZE", "1")
             ),
@@ -226,7 +229,11 @@ trainer = TrainerConfig(
                     f"inner-{model_cfg.vision_config.inner_optim}",
                     "ns5-exact-backward",
                     "ns5-backward-recompute",
-                    "state-ratio-clip-rho1",
+                    (
+                        "state-ratio-clip-rho1"
+                        if model_cfg.vision_config.clip_state_grad_ratio
+                        else "state-ratio-clip-off"
+                    ),
                     f"fw-layer-batch-{model_cfg.vision_config.fw_update_layer_group_size}",
                     (
                         "fw-projector"
