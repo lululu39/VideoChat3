@@ -513,7 +513,7 @@ Real 8xH100 FSDP/TimeLens smokes validate both linear variants and initializatio
 
 ## v12 - Linear16 + Delta R4, No FW Ratio Clip, TimeLens Random Half
 
-**Status:** Active from the retained LACT initialization; no prior v12 checkpoint exists.
+**Status:** Stopped by user after step 189/455 because roughly 2h44m remained. Training stayed finite throughout; a resumable step-100 DCP checkpoint exists, but no HF checkpoint was produced.
 
 - Objective: test whether chunk-level Linear+Delta avoids the `inf` recurrent gradient seen at step 3 for unclipped SwiGLU+Muon, while measuring end-to-end learning behavior rather than only systems speed.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; all original Base tensors load unchanged, the linear private Q/K/V/O branch is rebuilt by attention share-init, each per-video/per-layer linear state starts at zero, and every residual memory gate starts at zero.
@@ -528,3 +528,5 @@ Real 8xH100 FSDP/TimeLens smokes validate both linear variants and initializatio
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s2k-lr2e5-nofwclip-v12/<timestamp>/hf-<final-step>`.
 
 Startup validation passes the exact failure point of unclipped SwiGLU+Muon: v12 pre-clip global norms are `3.4528/3.3453/3.5551` on steps 1-3, all finite, whereas the controlled SwiGLU+Muon run gives `3.6351/3.3454/inf`. No optimizer step is skipped. Stable steps 2/3 take `39.27-39.30s` and `40.30-40.31s`; the observed maximum is `18.39 GB`. Native log: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s2k-lr2e5-nofwclip-v12/torchrun_logs/training_20260901_190523_datava270000004.log`.
+
+The longer run remains stable through step 189 with no invalid norm or skipped update. The maximum observed pre-clip norm is `4.2215` at step 4; steps 182-189 lie in `0.7625-1.5665`, ending at `0.9517`. Global CE falls from `0.6935` at step 1 to `0.3475` at step 189. Wall time is about 2h06m. The retained resume artifact is `20260901190541/checkpoints/ckpt-step-100` (`3.5G`, 23 files, `train_state.json` reports step 100); the run stopped before the step-200 checkpoint and before any HF interval save.
