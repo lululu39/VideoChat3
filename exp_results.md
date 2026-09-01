@@ -452,7 +452,7 @@ Conclusion: untrained R4 mean compression costs `7.90/5.20/8.28` points on Video
 
 ## v11 - LACT R4 Token Select, FW + Projector, TimeLens Random Half
 
-**Status:** The initial 8K-pack launch failed before step 1 with CUDA OOM; the clean 2K-pack restart launched at 2026-09-01 15:20 UTC with a provisional 10-12 hour ETA.
+**Status:** Stopped by user for performance investigation. The 8K launch OOMed before step 1; the 2K restart reached step 2/455 with no checkpoint and a measured 11h47m ETA.
 
 - Objective: test LACT's final-output token selection at R4 while adapting only the complete FW branch and multimodal projector. Every original four-frame chunk still traverses every LACT layer with continuous per-video state; only the final vision outputs retain the last chunk in each four-chunk macro group.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; no v10 or earlier trained checkpoint reuse. Original Base tensors are unchanged, private FW projections share-init from attention, and all 27 memory gates start at zero.
@@ -464,3 +464,21 @@ Conclusion: untrained R4 mean compression costs `7.90/5.20/8.28` points on Video
 - Training W&B: [`v11`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s2k-lr2e5-v11).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FWProj_train_timelens_r4_v11.sh`.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s2k-lr2e5-v11/<timestamp>/hf-<final-step>`, exported with matching LACT R4 model and processor code.
+
+### Performance Diagnosis
+
+The 2K layout contains 7,270 packs / 455 optimizer steps. Its first stable measured step takes `95.67s` and reports an ETA of `11:46:48`; peak allocated memory is `45.07 GB`. The user stopped it after step 2 to diagnose why v10 Base R4 completes in about 40 minutes. No checkpoint exists.
+
+The difference is architectural rather than an ETA error. On the actual TimeLens sampling recipe, the 12,624 rows average `233.9` frames, `58.5` four-frame chunks, and `57.5` effective FW updates per layer; the median is 55 updates and the 90th percentile/max is 111. Thus one average video executes about `27 * 57.5 = 1,552` separate layer-update events. By comparison, the referenced TTT-LVSM nanoauto config is width 512 with 8 layers and 12 views, yielding 11 updates / 88 layer-update events per sample; VideoMamba VideoLACT F64 is width 432 with 32 layers and group size 8, yielding 7 updates / 224 layer-update events.
+
+| Implementation | Width | Layers | Typical updates/layer | Layer-update events/sample | Update engineering |
+|---|---:|---:|---:|---:|---|
+| VideoChat3-LACT TimeLens | `1152` | `27` | `57.5` mean | `~1,552` | batch-size-1 Python scan per video/layer; three matrices fused only within one layer; no `torch.compile` |
+| TTT-LVSM nanoauto ref | `512` | `8` | `11` | `88` | batch 8/GPU; compiled block apply and update |
+| VideoMamba VideoLACT F64 | `432` | `32` | `7` | `224` | batch 4/GPU with two samples; compiled apply/update and four-layer batched FW updates |
+
+The fast branch is also not small relative to the ViT: VideoChat3-LACT adds 358.5M parameters to a 416.9M Base vision tower. Every non-final four-frame chunk applies a private projected SwiGLU and performs prediction/update GEMMs plus three five-step Newton-Schulz normalizations on `1152 x 2304` matrices. NS5 arithmetic scales cubically with width: approximately `229 GFLOP` per layer-update at width 1152 versus `20 GFLOP` at width 512 and `12 GFLOP` at width 432, before backward. Across the typical horizons, the forward NS5 work per sample is therefore roughly 200x the TTT-LVSM reference and 130x VideoMamba's F64 recipe, before accounting for their larger per-GPU batch utilization.
+
+An isolated H100 benchmark at 224 frames and a 16x16 patch grid confirms the realized cost. Base vision takes `0.300s`; LACT vision takes `3.131s` (`10.43x`), and the full VLM with identical 3,617-token LLM input takes `0.391s` versus `3.221s` (`8.23x`). Within LACT vision, reset-state apply-only takes `0.869s`, sequential updates with NS disabled take `2.081s`, and full NS5 takes `3.134s`: relative to full LACT time, Base attention/MLP is about 10%, added memory apply about 18%, non-NS update about 39%, and NS5 about 34%. Native benchmark: `/mnt/localssd/VideoChat3/benchmark_h100_lact_long_scan_diagnosis.json`.
+
+Training adds two more costs absent from the forward benchmark: all 27 recurrent scans are activation-checkpointed and recomputed during backward, while bounded NS5 backward explicitly recomputes NS5 again to obtain its exact VJP before clipping. The state-adjoint clip also operates on all six BF16/FP32 state matrices at every transition. Finally, Base R4 fits 1,485 8K packs / 93 optimizer steps; LACT requires 2K packs to avoid OOM, producing 7,270 packs / 455 optimizer steps and about 4.9x as many FSDP/optimizer synchronization points. These effects explain the observed 40-minute versus roughly 12-hour wall time despite identical post-compression LLM token totals.
