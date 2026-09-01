@@ -1356,6 +1356,15 @@ class VideoChat3LACTVisionEncoder(nn.Module):
     def _compiled_batched_update_linear_states(self, *args):
         return self._batched_update_linear_states(*args)
 
+    @torch.compile(dynamic=True)
+    def _compiled_checkpoint_batched_update_linear_states(self, *args):
+        return checkpoint.checkpoint(
+            self._batched_update_linear_states,
+            *args,
+            preserve_rng_state=False,
+            use_reentrant=False,
+        )
+
     @staticmethod
     def _stack_linear_update_parameters(layers):
         return (
@@ -1366,6 +1375,27 @@ class VideoChat3LACTVisionEncoder(nn.Module):
             torch.stack([layer.beta_proj.weight for layer in layers]),
         )
 
+    @staticmethod
+    def _forward_one_linear_layer_chunk(
+        chunk_hidden: torch.Tensor,
+        chunk_rope: torch.Tensor,
+        state: torch.Tensor,
+        *,
+        wrapped_layer,
+        chunk_cu_seqlens: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        # Checkpoint recomputation enters below the encoder's original FSDP
+        # unshard site. Materialize this block before both the initial apply
+        # and its per-layer chunk recomputation.
+        if hasattr(wrapped_layer, "unshard"):
+            wrapped_layer.unshard()
+        return wrapped_layer(
+            chunk_hidden,
+            chunk_cu_seqlens,
+            chunk_rope,
+            chunk_linear_state=state,
+        )
+
     def _forward_linear_all_layers_chunk(
         self,
         chunk_hidden: torch.Tensor,
@@ -1373,24 +1403,32 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         states: torch.Tensor,
         *,
         wrapped_layers,
-        layers,
         chunk_cu_seqlens,
+        update_groups,
         will_update: bool,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Run one chunk through every layer, then batch all state updates."""
         memory_inputs = []
         for layer_index, wrapped_layer in enumerate(wrapped_layers):
-            # Whole-chunk checkpoint recomputation enters below the encoder's
-            # original unshard site. Materialize each FSDP2 block explicitly
-            # so its parameters cannot remain DTensors during recompute.
-            if hasattr(wrapped_layer, "unshard"):
-                wrapped_layer.unshard()
-            chunk_hidden, memory_input = wrapped_layer(
-                chunk_hidden,
-                chunk_cu_seqlens,
-                chunk_rope,
-                chunk_linear_state=states[layer_index],
+            layer_forward = partial(
+                self._forward_one_linear_layer_chunk,
+                wrapped_layer=wrapped_layer,
+                chunk_cu_seqlens=chunk_cu_seqlens,
             )
+            args = (chunk_hidden, chunk_rope, states[layer_index])
+            if (
+                self.cross_layer_checkpoint
+                and self.training
+                and torch.is_grad_enabled()
+            ):
+                chunk_hidden, memory_input = checkpoint.checkpoint(
+                    layer_forward,
+                    *args,
+                    preserve_rng_state=self.checkpoint_preserve_rng_state,
+                    use_reentrant=False,
+                )
+            else:
+                chunk_hidden, memory_input = layer_forward(*args)
             memory_inputs.append(memory_input)
 
         if not will_update:
@@ -1398,19 +1436,18 @@ class VideoChat3LACTVisionEncoder(nn.Module):
 
         memory_inputs = torch.stack(memory_inputs)
         updated_state_groups = []
-        for layer_start in range(
-            0,
-            len(layers),
-            self.fw_update_layer_group_size,
-        ):
-            layer_end = min(
-                layer_start + self.fw_update_layer_group_size,
-                len(layers),
-            )
-            update_layers = layers[layer_start:layer_end]
-            update_weights, value_weights, beta_weights = (
-                self._stack_linear_update_parameters(update_layers)
-            )
+        use_checkpoint = (
+            self.cross_layer_checkpoint
+            and self.training
+            and torch.is_grad_enabled()
+        )
+        for (
+            layer_start,
+            layer_end,
+            update_layers,
+            update_parameters,
+        ) in update_groups:
+            update_weights, value_weights, beta_weights = update_parameters
             args = (
                 memory_inputs[layer_start:layer_end],
                 states[layer_start:layer_end],
@@ -1426,7 +1463,20 @@ class VideoChat3LACTVisionEncoder(nn.Module):
             full_group = (
                 layer_end - layer_start == self.fw_update_layer_group_size
             )
-            if chunk_hidden.is_cuda and full_group:
+            if use_checkpoint and chunk_hidden.is_cuda and full_group:
+                updated_states = (
+                    self._compiled_checkpoint_batched_update_linear_states(
+                        *args
+                    )
+                )
+            elif use_checkpoint:
+                updated_states = checkpoint.checkpoint(
+                    self._batched_update_linear_states,
+                    *args,
+                    preserve_rng_state=False,
+                    use_reentrant=False,
+                )
+            elif chunk_hidden.is_cuda and full_group:
                 updated_states = self._compiled_batched_update_linear_states(
                     *args
                 )
@@ -1449,6 +1499,29 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         if reset_state and self.training:
             raise RuntimeError("reset_state is an inference-only LACT state mode")
 
+        # Match VideoMamba: stack layer-specific update parameters once and
+        # reuse them for every temporal chunk. Re-stacking inside each update
+        # checkpoint would retain a full duplicate for every recurrent step.
+        update_groups = []
+        for layer_start in range(
+            0,
+            len(layers),
+            self.fw_update_layer_group_size,
+        ):
+            layer_end = min(
+                layer_start + self.fw_update_layer_group_size,
+                len(layers),
+            )
+            update_layers = layers[layer_start:layer_end]
+            update_groups.append(
+                (
+                    layer_start,
+                    layer_end,
+                    update_layers,
+                    self._stack_linear_update_parameters(update_layers),
+                )
+            )
+
         outputs = []
         clip_index = 0
         for clip_count in video_clip_counts:
@@ -1468,31 +1541,15 @@ class VideoChat3LACTVisionEncoder(nn.Module):
                     chunk_states = states
 
                 start, end = clip_slices[clip_index]
-                chunk_forward = partial(
-                    self._forward_linear_all_layers_chunk,
-                    wrapped_layers=wrapped_layers,
-                    layers=layers,
-                    chunk_cu_seqlens=clip_cu_seqlens[clip_index],
-                    will_update=will_update,
-                )
-                args = (
+                chunk_hidden, states = self._forward_linear_all_layers_chunk(
                     hidden_states[start:end],
                     rope_freqs_cis[start:end],
                     chunk_states,
+                    wrapped_layers=wrapped_layers,
+                    chunk_cu_seqlens=clip_cu_seqlens[clip_index],
+                    update_groups=update_groups,
+                    will_update=will_update,
                 )
-                if (
-                    self.cross_layer_checkpoint
-                    and self.training
-                    and torch.is_grad_enabled()
-                ):
-                    chunk_hidden, states = checkpoint.checkpoint(
-                        chunk_forward,
-                        *args,
-                        preserve_rng_state=self.checkpoint_preserve_rng_state,
-                        use_reentrant=False,
-                    )
-                else:
-                    chunk_hidden, states = chunk_forward(*args)
                 if state_ratio_context is not None:
                     states = _CaptureNextLinearStateGradient.apply(
                         states,
