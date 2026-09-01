@@ -63,32 +63,6 @@ def init_world_mesh():
     return fsdp_mesh
 
 
-def init_videochat_parallel_mesh(fsdp_config: FSDPConfig):
-    """Return the shard mesh and optional replicated HSDP mesh.
-
-    A sharding size of one is fully replicated data parallelism: parameters
-    remain local on every rank and gradients synchronize over the replicate
-    dimension, while retaining FSDP2 mixed precision/checkpoint plumbing.
-    """
-    if fsdp_config.hsdp_sharding_size is None:
-        return init_world_mesh(), None
-    world_size = dist.get_world_size()
-    sharding_size = fsdp_config.hsdp_sharding_size
-    if world_size % sharding_size:
-        raise ValueError(
-            f"world_size={world_size} must divide hsdp_sharding_size={sharding_size}"
-        )
-    hsdp_mesh = init_device_mesh(
-        DEVICE,
-        (world_size // sharding_size, sharding_size),
-        mesh_dim_names=(
-            f"{fsdp_config.mesh_prefix}.hsdp_replicate",
-            f"{fsdp_config.mesh_prefix}.hsdp_shard",
-        ),
-    )
-    return hsdp_mesh[f"{fsdp_config.mesh_prefix}.hsdp_shard"], hsdp_mesh
-
-
 NORM2FN = {"layer_norm": nn.LayerNorm, "rms_norm": RMSNorm}
 
 
@@ -721,13 +695,8 @@ class VideoChat3VisionModel(BaseModel):
         device = "cpu" if fsdp_config.cpu_offload else str(DEVICE)
 
         # NOTE: 在 cpu_offload 模式下，mesh 应该是 cuda 的，在 meta fully_shard 后在调用 .to_empty(device=cpu)
-        self.fsdp_mesh, self.hsdp_mesh = init_videochat_parallel_mesh(
-            fsdp_config
-        )
+        self.fsdp_mesh = init_world_mesh()
         assert self.fsdp_mesh is not None
-        fully_shard_mesh = (
-            self.hsdp_mesh if self.hsdp_mesh is not None else self.fsdp_mesh
-        )
 
         if fsdp_config.requires_grad:
             for module in self.modules():
@@ -754,19 +723,10 @@ class VideoChat3VisionModel(BaseModel):
         cross_layer_lact = (
             getattr(self.config, "fw_update_layer_group_size", 1) > 1
         )
-        linear_cross_layer = (
-            cross_layer_lact
-            and getattr(self.config, "memory_type", None) == "linear"
-        )
-        if linear_cross_layer:
-            self.encoder.cross_layer_checkpoint = num_recompute_layers > 0
-            self.encoder.checkpoint_preserve_rng_state = (
-                checkpoint_preserve_rng_state
-            )
         for layer_idx in tqdm(shuffled_layers_idxs, desc="[Vision Fully Shard]"):
             layer = self.encoder.blocks[layer_idx]
 
-            if layer_idx < num_recompute_layers and not linear_cross_layer:
+            if layer_idx < num_recompute_layers:
                 layer = checkpoint_wrapper(layer, 
                                         preserve_rng_state=checkpoint_preserve_rng_state,
                                         checkpoint_impl=checkpoint_impl)
@@ -775,7 +735,7 @@ class VideoChat3VisionModel(BaseModel):
 
             fully_shard(
                 layer,
-                mesh=fully_shard_mesh,
+                mesh=self.fsdp_mesh,
                 mp_policy=mp_policy,
                 # Cross-layer LACT stacks parameters from several blocks for
                 # one batched FW update, so every block must remain
@@ -792,7 +752,7 @@ class VideoChat3VisionModel(BaseModel):
 
         fully_shard(
             self,
-            mesh=fully_shard_mesh,
+            mesh=self.fsdp_mesh,
             mp_policy=mp_policy,
             reshard_after_forward=True,
             offload_policy=CPUOffloadPolicy() if fsdp_config.cpu_offload else None,

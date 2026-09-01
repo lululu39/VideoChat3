@@ -101,6 +101,10 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
             raise ValueError("fw_norm_epsilon must be positive")
         if self.fw_update_layer_group_size <= 0:
             raise ValueError("fw_update_layer_group_size must be positive")
+        if self.memory_type == "linear" and self.fw_update_layer_group_size != 1:
+            raise ValueError(
+                "linear memory currently requires fw_update_layer_group_size=1"
+            )
 
     def build(self):
         from .modeling_vision_lact import VideoChat3VisionLACTModel

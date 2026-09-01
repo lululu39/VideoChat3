@@ -12,7 +12,7 @@ from xtuner.v1.ops.comm import split_for_sequence_parallel
 from xtuner.v1.utils import get_logger, get_padding_length, get_device
 from xtuner.v1.model import BaseModel
 
-from .modeling_vision import init_videochat_parallel_mesh
+from .modeling_vision import init_world_mesh
 from .modeling_projector import VideoChat3MultiModalProjector
 from typing_extensions import override
 from xtuner.v1.config import FSDPConfig
@@ -134,18 +134,13 @@ class VideoChat3ForConditionalGeneration(BaseModel):
             param_dtype=fsdp_config.param_dtype, reduce_dtype=fsdp_config.reduce_dtype
         )
 
-        self.fsdp_mesh, self.hsdp_mesh = init_videochat_parallel_mesh(
-            fsdp_config
-        )
+        self.fsdp_mesh = init_world_mesh()
         # Note: 非常关键，不能删除这个 assert
         assert self.fsdp_mesh is not None
-        fully_shard_mesh = (
-            self.hsdp_mesh if self.hsdp_mesh is not None else self.fsdp_mesh
-        )
 
         fully_shard(
             self,
-            mesh=fully_shard_mesh,
+            mesh=self.fsdp_mesh,
             mp_policy=mp_policy,
             reshard_after_forward=fsdp_config.reshard_after_forward,
             offload_policy=CPUOffloadPolicy() if fsdp_config.cpu_offload else None,

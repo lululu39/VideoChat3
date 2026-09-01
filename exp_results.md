@@ -513,7 +513,7 @@ Real 8xH100 FSDP/TimeLens smokes validate both linear variants and initializatio
 
 ## v12 - Linear16 + Delta R4, No FW Ratio Clip, TimeLens Random Half
 
-**Status:** Stopped by user after step 189/455 because roughly 2h44m remained. Training stayed finite throughout; a resumable step-100 DCP checkpoint exists, but no HF checkpoint was produced.
+**Status:** Prepared for a clean 8K FSDP restart. The retired 2K precursor stopped at step 189/455 and is not resumed; its step-100 DCP remains diagnostic-only.
 
 - Objective: test whether chunk-level Linear+Delta avoids the `inf` recurrent gradient seen at step 3 for unclipped SwiGLU+Muon, while measuring end-to-end learning behavior rather than only systems speed.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; all original Base tensors load unchanged, the linear private Q/K/V/O branch is rebuilt by attention share-init, each per-video/per-layer linear state starts at zero, and every residual memory gate starts at zero.
@@ -522,16 +522,20 @@ Real 8xH100 FSDP/TimeLens smokes validate both linear variants and initializatio
 - Memory/update: `memory_type=linear`, 16 heads (`72x72` state per head), `inner_optim=delta`, apply-then-update once per four-frame chunk, continuous state, and final update skipped.
 - Optimizer and schedule: outer Linear-FW and projector AdamW groups both use `2e-5 -> 1e-6`, 3% warmup, cosine decay, weight decay 0, and one epoch; initial inner Delta write strength is `0.01` with learned token/head β.
 - Stabilization: no FW ratio clip (`clip_ns_grad_ratio=False`, `clip_state_grad_ratio=False`) and no NS5 on the Delta path. XTuner's true FSDP global gradient clip remains 1.0; logged `grad_norm` is pre-clip, and invalid norms are skipped.
-- Hardware and packing: 8xH100, global batch 16, 2K sample/pack length, 2 FPS, 64-448 frames, R4 token selection, 7,270 packs / 455 optimizer steps.
-- Training W&B: [`v12`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s2k-lr2e5-nofwclip-v12).
+- Hardware and packing: 8xH100, ordinary FSDP, global batch 16, 8K sample/pack length, 2 FPS, 64-448 frames, R4 token selection, 1,485 packs / 93 optimizer steps, and strict layer-major group 1. Replicated DDP/HSDP and all later Linear cross-layer/chunk-major code are removed.
+- Training W&B: [`v12`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-nofwclip-v12).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_FWProj_train_timelens_r4_v12.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s2k-lr2e5-nofwclip-v12/<timestamp>/hf-<final-step>`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-nofwclip-v12/<timestamp>/hf-93`.
+
+### Retired 2K Precursor
+
+The prior W&B run is [`v12-2K`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s2k-lr2e5-nofwclip-v12). It used the same model, data, optimizer, LR, no-FW-clip policy, and global batch; only packing differs from the clean 8K restart.
 
 Startup validation passes the exact failure point of unclipped SwiGLU+Muon: v12 pre-clip global norms are `3.4528/3.3453/3.5551` on steps 1-3, all finite, whereas the controlled SwiGLU+Muon run gives `3.6351/3.3454/inf`. No optimizer step is skipped. Stable steps 2/3 take `39.27-39.30s` and `40.30-40.31s`; the observed maximum is `18.39 GB`. Native log: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s2k-lr2e5-nofwclip-v12/torchrun_logs/training_20260901_190523_datava270000004.log`.
 
 The longer run remains stable through step 189 with no invalid norm or skipped update. The maximum observed pre-clip norm is `4.2215` at step 4; steps 182-189 lie in `0.7625-1.5665`, ending at `0.9517`. Global CE falls from `0.6935` at step 1 to `0.3475` at step 189. Wall time is about 2h06m. The retained resume artifact is `20260901190541/checkpoints/ckpt-step-100` (`3.5G`, 23 files, `train_state.json` reports step 100); the run stopped before the step-200 checkpoint and before any HF interval save.
 
-### 8K Packing and Replicated Data Parallel
+### Retired 8K/DDP/Cross-Layer Systems Exploration
 
 The first Linear+Delta FSDP 8K memory smoke completes a full forward/backward/optimizer step without OOM. It restores 1,485 packs / 93 steps and processes about 15.7-16.3K text tokens per rank/step. The allocated/reserved maxima are `66.49/69.13 GB`, while instantaneous `nvidia-smi` usage reaches about `73 GB`; the margin is therefore only 6-10GB. Step 1 takes `200.56-251.68s` across ranks including `53.74-104.84s` data wait and reports finite norm `2.8855`. Log: `xtuner-videochat3/work_dir/stage3/vc3-lact-linear16-delta-fsdp-s8k-memory-smoke/torchrun_logs/training_20260901_211428_datava270000004.log`.
 

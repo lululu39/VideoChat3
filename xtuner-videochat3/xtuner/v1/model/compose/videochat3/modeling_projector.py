@@ -16,7 +16,7 @@ from torch.distributed.fsdp import (
     MixedPrecisionPolicy,
     fully_shard,
 )
-from .modeling_vision import init_videochat_parallel_mesh
+from .modeling_vision import init_world_mesh
 
 DEVICE = get_device()
 DEVICE_MODULE = get_torch_device_module()
@@ -72,13 +72,8 @@ class VideoChat3MultiModalProjector(BaseModel):
         mp_policy = MixedPrecisionPolicy(
             param_dtype=fsdp_config.param_dtype, reduce_dtype=fsdp_config.reduce_dtype
         )
-        self.fsdp_mesh, self.hsdp_mesh = init_videochat_parallel_mesh(
-            fsdp_config
-        )
+        self.fsdp_mesh = init_world_mesh()
         assert self.fsdp_mesh is not None
-        fully_shard_mesh = (
-            self.hsdp_mesh if self.hsdp_mesh is not None else self.fsdp_mesh
-        )
 
         if fsdp_config.requires_grad:
             for module in self.modules():
@@ -92,7 +87,7 @@ class VideoChat3MultiModalProjector(BaseModel):
 
         fully_shard(
             self,
-            mesh=fully_shard_mesh,
+            mesh=self.fsdp_mesh,
             mp_policy=mp_policy,
             reshard_after_forward=True,
             offload_policy=CPUOffloadPolicy() if fsdp_config.cpu_offload else None,

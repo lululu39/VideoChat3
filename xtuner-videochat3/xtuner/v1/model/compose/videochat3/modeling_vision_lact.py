@@ -1,5 +1,4 @@
 import math
-from functools import partial
 from pathlib import Path
 
 import torch
@@ -1015,29 +1014,6 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         hidden_states = residual + hidden_states
         return hidden_states, memory_input, key, target
 
-    def forward_linear_chunk(
-        self,
-        hidden_states: torch.Tensor,
-        cu_seqlens: torch.Tensor,
-        rope_freqs_cis: torch.Tensor,
-        state: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        if self.memory_type != "linear":
-            raise RuntimeError("forward_linear_chunk requires linear memory")
-        hidden_states = self.forward_attention(
-            hidden_states,
-            cu_seqlens,
-            rope_freqs_cis,
-        )
-        hidden_states, memory_input, _, _ = self.apply_memory(
-            hidden_states.unsqueeze(0),
-            state,
-        )
-        hidden_states = hidden_states.squeeze(0)
-        residual = hidden_states
-        hidden_states = self.mlp(self.norm1(hidden_states))
-        return residual + hidden_states, memory_input
-
     def forward_chunk(
         self,
         hidden_states: torch.Tensor,
@@ -1063,15 +1039,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             torch.Tensor,
         ]
         | None = None,
-        chunk_linear_state: torch.Tensor | None = None,
     ) -> torch.Tensor | tuple[torch.Tensor, ...]:
-        if chunk_linear_state is not None:
-            return self.forward_linear_chunk(
-                hidden_states,
-                cu_seqlens,
-                rope_freqs_cis,
-                chunk_linear_state,
-            )
         if chunk_fast_weights is not None:
             return self.forward_chunk(
                 hidden_states,
@@ -1103,8 +1071,6 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         self.blocks = nn.ModuleList([VideoChat3LACTVisionLayer(**block_cfg) for _ in range(num_layers)])
         self.final_layernorm = nn.LayerNorm(hidden_dim)
         self.fw_update_layer_group_size = int(fw_update_layer_group_size)
-        self.cross_layer_checkpoint = False
-        self.checkpoint_preserve_rng_state = True
         if self.fw_update_layer_group_size <= 0:
             raise ValueError("fw_update_layer_group_size must be positive")
 
@@ -1267,302 +1233,6 @@ class VideoChat3LACTVisionEncoder(nn.Module):
             )
         return lr_weights, update_weights, value_weights
 
-    def _batched_update_linear_states(
-        self,
-        memory_inputs: torch.Tensor,
-        states: torch.Tensor,
-        update_weights: torch.Tensor,
-        value_weights: torch.Tensor,
-        beta_weights: torch.Tensor,
-        base_lr_inverse: float,
-        inner_optim: str,
-        muon_update_steps: int,
-        clip_ns_grad_ratio: bool,
-        recompute_ns5_backward: bool,
-    ) -> torch.Tensor:
-        """Update several linear-memory layers by folding layer into batch."""
-        num_layers, batch_size, seq_len, dim = memory_inputs.shape
-        num_heads = states.shape[2]
-        head_dim = states.shape[-1]
-        flat_inputs = memory_inputs.reshape(
-            num_layers,
-            batch_size * seq_len,
-            dim,
-        )
-        prediction_inputs = F.rms_norm(
-            memory_inputs,
-            normalized_shape=(dim,),
-            eps=1e-5,
-        )
-        flat_prediction_inputs = prediction_inputs.reshape(
-            num_layers,
-            batch_size * seq_len,
-            dim,
-        )
-        keys = torch.bmm(
-            flat_inputs,
-            update_weights.transpose(1, 2),
-        ).reshape(num_layers, batch_size, seq_len, dim)
-        keys = F.rms_norm(F.silu(keys), normalized_shape=(dim,), eps=1e-5)
-        keys = F.normalize(
-            keys.reshape(
-                num_layers,
-                batch_size,
-                seq_len,
-                num_heads,
-                head_dim,
-            ),
-            dim=-1,
-            eps=1e-5,
-        ).to(states.dtype)
-        targets = torch.bmm(
-            flat_prediction_inputs,
-            value_weights.transpose(1, 2),
-        ).reshape(
-            num_layers,
-            batch_size,
-            seq_len,
-            num_heads,
-            head_dim,
-        ).to(states.dtype)
-        with torch.autocast(device_type=memory_inputs.device.type, enabled=False):
-            betas = torch.bmm(
-                flat_prediction_inputs.float(),
-                beta_weights.float().transpose(1, 2),
-            ).reshape(num_layers, batch_size, seq_len, num_heads)
-            betas = torch.sigmoid(betas + base_lr_inverse)
-
-        prediction = torch.einsum("lbthd,lbhde->lbthe", keys, states)
-        weighted_error = (targets - prediction) * betas.to(
-            states.dtype
-        ).unsqueeze(-1)
-        state_gradient = torch.einsum(
-            "lbthd,lbthe->lbhde",
-            keys,
-            weighted_error,
-        ) / seq_len
-        if inner_optim == "muon":
-            state_update = zeropower_via_newtonschulz5(
-                state_gradient.flatten(0, 2),
-                muon_update_steps,
-                clip_ns_grad_ratio=clip_ns_grad_ratio,
-                recompute_ns5_backward=recompute_ns5_backward,
-            ).reshape_as(state_gradient)
-        else:
-            state_update = state_gradient
-        return states + state_update.to(states.dtype)
-
-    @torch.compile(dynamic=True)
-    def _compiled_batched_update_linear_states(self, *args):
-        return self._batched_update_linear_states(*args)
-
-    @torch.compile(dynamic=True)
-    def _compiled_checkpoint_batched_update_linear_states(self, *args):
-        return checkpoint.checkpoint(
-            self._batched_update_linear_states,
-            *args,
-            preserve_rng_state=False,
-            use_reentrant=False,
-        )
-
-    @staticmethod
-    def _stack_linear_update_parameters(layers):
-        return (
-            torch.stack(
-                [layer.memory.update_proj[0].weight for layer in layers]
-            ),
-            torch.stack([layer.value_proj.weight for layer in layers]),
-            torch.stack([layer.beta_proj.weight for layer in layers]),
-        )
-
-    @staticmethod
-    def _forward_one_linear_layer_chunk(
-        chunk_hidden: torch.Tensor,
-        chunk_rope: torch.Tensor,
-        state: torch.Tensor,
-        *,
-        wrapped_layer,
-        chunk_cu_seqlens: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        # Checkpoint recomputation enters below the encoder's original FSDP
-        # unshard site. Materialize this block before both the initial apply
-        # and its per-layer chunk recomputation.
-        if hasattr(wrapped_layer, "unshard"):
-            wrapped_layer.unshard()
-        return wrapped_layer(
-            chunk_hidden,
-            chunk_cu_seqlens,
-            chunk_rope,
-            chunk_linear_state=state,
-        )
-
-    def _forward_linear_all_layers_chunk(
-        self,
-        chunk_hidden: torch.Tensor,
-        chunk_rope: torch.Tensor,
-        states: torch.Tensor,
-        *,
-        wrapped_layers,
-        chunk_cu_seqlens,
-        update_groups,
-        will_update: bool,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
-        """Run one chunk through every layer, then batch all state updates."""
-        memory_inputs = []
-        for layer_index, wrapped_layer in enumerate(wrapped_layers):
-            layer_forward = partial(
-                self._forward_one_linear_layer_chunk,
-                wrapped_layer=wrapped_layer,
-                chunk_cu_seqlens=chunk_cu_seqlens,
-            )
-            args = (chunk_hidden, chunk_rope, states[layer_index])
-            if (
-                self.cross_layer_checkpoint
-                and self.training
-                and torch.is_grad_enabled()
-            ):
-                chunk_hidden, memory_input = checkpoint.checkpoint(
-                    layer_forward,
-                    *args,
-                    preserve_rng_state=self.checkpoint_preserve_rng_state,
-                    use_reentrant=False,
-                )
-            else:
-                chunk_hidden, memory_input = layer_forward(*args)
-            memory_inputs.append(memory_input)
-
-        if not will_update:
-            return chunk_hidden, states
-
-        memory_inputs = torch.stack(memory_inputs)
-        updated_state_groups = []
-        use_checkpoint = (
-            self.cross_layer_checkpoint
-            and self.training
-            and torch.is_grad_enabled()
-        )
-        for (
-            layer_start,
-            layer_end,
-            update_layers,
-            update_parameters,
-        ) in update_groups:
-            update_weights, value_weights, beta_weights = update_parameters
-            args = (
-                memory_inputs[layer_start:layer_end],
-                states[layer_start:layer_end],
-                update_weights,
-                value_weights,
-                beta_weights,
-                update_layers[0].base_lr_inverse,
-                update_layers[0].memory.inner_optim,
-                update_layers[0].muon_update_steps,
-                update_layers[0].memory.clip_ns_grad_ratio,
-                update_layers[0].memory.recompute_ns5_backward,
-            )
-            full_group = (
-                layer_end - layer_start == self.fw_update_layer_group_size
-            )
-            if use_checkpoint and chunk_hidden.is_cuda and full_group:
-                updated_states = (
-                    self._compiled_checkpoint_batched_update_linear_states(
-                        *args
-                    )
-                )
-            elif use_checkpoint:
-                updated_states = checkpoint.checkpoint(
-                    self._batched_update_linear_states,
-                    *args,
-                    preserve_rng_state=False,
-                    use_reentrant=False,
-                )
-            elif chunk_hidden.is_cuda and full_group:
-                updated_states = self._compiled_batched_update_linear_states(
-                    *args
-                )
-            else:
-                updated_states = self._batched_update_linear_states(*args)
-            updated_state_groups.append(updated_states)
-        return chunk_hidden, torch.cat(updated_state_groups, dim=0)
-
-    def _forward_cross_layer_linear_groups(
-        self,
-        hidden_states: torch.Tensor,
-        rope_freqs_cis: torch.Tensor,
-        clip_slices: list[tuple[int, int]],
-        video_clip_counts: list[int],
-        clip_cu_seqlens: list[torch.Tensor],
-    ) -> torch.Tensor:
-        wrapped_layers = tuple(self.blocks)
-        layers = tuple(self._unwrap_layer(layer) for layer in wrapped_layers)
-        reset_state = layers[0].lact_inference_state_mode == "reset_state"
-        if reset_state and self.training:
-            raise RuntimeError("reset_state is an inference-only LACT state mode")
-
-        # Match VideoMamba: stack layer-specific update parameters once and
-        # reuse them for every temporal chunk. Re-stacking inside each update
-        # checkpoint would retain a full duplicate for every recurrent step.
-        update_groups = []
-        for layer_start in range(
-            0,
-            len(layers),
-            self.fw_update_layer_group_size,
-        ):
-            layer_end = min(
-                layer_start + self.fw_update_layer_group_size,
-                len(layers),
-            )
-            update_layers = layers[layer_start:layer_end]
-            update_groups.append(
-                (
-                    layer_start,
-                    layer_end,
-                    update_layers,
-                    self._stack_linear_update_parameters(update_layers),
-                )
-            )
-
-        outputs = []
-        clip_index = 0
-        for clip_count in video_clip_counts:
-            states = torch.stack(
-                [layer.init_linear_state(batch_size=1) for layer in layers]
-            )
-            for video_clip_index in range(clip_count):
-                will_update = not reset_state and video_clip_index + 1 < clip_count
-                state_ratio_context = None
-                if will_update and layers[0].clip_state_grad_ratio:
-                    state_ratio_context = _StateGradRatioContext()
-                    chunk_states = _BoundPreviousLinearStateGradient.apply(
-                        states,
-                        state_ratio_context,
-                    )
-                else:
-                    chunk_states = states
-
-                start, end = clip_slices[clip_index]
-                chunk_hidden, states = self._forward_linear_all_layers_chunk(
-                    hidden_states[start:end],
-                    rope_freqs_cis[start:end],
-                    chunk_states,
-                    wrapped_layers=wrapped_layers,
-                    chunk_cu_seqlens=clip_cu_seqlens[clip_index],
-                    update_groups=update_groups,
-                    will_update=will_update,
-                )
-                if state_ratio_context is not None:
-                    states = _CaptureNextLinearStateGradient.apply(
-                        states,
-                        state_ratio_context,
-                    )
-                outputs.append(chunk_hidden)
-                clip_index += 1
-        if clip_index != len(clip_slices):
-            raise ValueError(
-                f"Consumed {clip_index} clips, but layout contains {len(clip_slices)}"
-            )
-        return torch.cat(outputs, dim=0)
-
     def _forward_cross_layer_groups(
         self,
         hidden_states: torch.Tensor,
@@ -1585,15 +1255,6 @@ class VideoChat3LACTVisionEncoder(nn.Module):
             )
             for start, end in clip_slices
         ]
-        first_layer = self._unwrap_layer(self.blocks[0])
-        if first_layer.memory_type == "linear":
-            return self._forward_cross_layer_linear_groups(
-                hidden_states,
-                rope_freqs_cis,
-                clip_slices,
-                video_clip_counts,
-                clip_cu_seqlens,
-            )
         for layer_start in range(
             0,
             len(self.blocks),
