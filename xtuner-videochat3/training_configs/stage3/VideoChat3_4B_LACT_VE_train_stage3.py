@@ -48,11 +48,13 @@ macro_temporal_compression_factor = int(
     os.getenv("VIDEOCHAT3_MACRO_TEMPORAL_COMPRESSION_FACTOR", "1")
 )
 model_variant = os.getenv("VIDEOCHAT3_MODEL_VARIANT", "lact")
+train_projector = env_bool("VIDEOCHAT3_TRAIN_PROJECTOR")
 
 if model_variant == "lact":
     model_cfg = VideoChat3LACTDense4BConfig(
         train_lact_only=env_bool("VIDEOCHAT3_TRAIN_LACT_ONLY"),
         freeze_lact_memory_gate=env_bool("VIDEOCHAT3_FREEZE_LACT_MEMORY_GATE"),
+        freeze_projector=not train_projector,
         vision_config=VideoChat3LACTVisionConfig(
             attn_impl="flash_attention_2",
             clip_ns_grad_ratio=True,
@@ -218,7 +220,11 @@ trainer = TrainerConfig(
                     "fw-window-4",
                     "ns5-ratio-clip-rho1",
                     "state-ratio-clip-rho1",
-                    "vision-encoder-only",
+                    (
+                        "fw-projector"
+                        if train_projector
+                        else "vision-encoder-only"
+                    ),
                     dataset_tag,
                 ]
                 if model_variant == "lact"
