@@ -397,7 +397,7 @@ Conclusion: larger positive FW amplitude does not recover hidden utility. `alpha
 
 ## v9 - Random-Half TimeLens Grounding, v4 FW-Only Recipe
 
-**Status:** Training in progress; startup validated through step 2/417.
+**Status:** Stopped by user at step 87/417; diagnostic-only, with no checkpoint or evaluation.
 
 - Objective: run the same clean temporal-grounding control as planned for v9 while reducing the approximately 22-24 hour full balanced run to roughly half that wall time. The stopped full-data attempt and its W&B run are intentionally removed from the experiment record.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; no prior checkpoint reuse. All 27 memory gates start at zero and every original Base tensor is bitwise unchanged.
@@ -412,5 +412,33 @@ Conclusion: larger positive FW amplitude does not recover hidden utility. `alpha
 - Sampling utility and audit: `scripts/sample_timelens_videochat3.py`; `/mnt/localssd/dataset/VideoChat3/TimeLens-100K/timelens_100k_random_12624_summary.json`.
 - Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-fwlr2e5-ns5r1-stgr1-v9/20260901003749`.
 - Startup validation: all ranks loaded the random-half manifest and the exact v4 LACT-only optimizer scope. Steps 1-2 had global CE `0.45659/0.56457`, finite pre-clip norms `0.8699/0.7449` (neither required global clipping), expected warmup LR `0/1.6667e-6`, and maximum allocated memory about `45.26 GB`. The stable second step took about `101.2` seconds with no NaN, OOM, or media error, giving an initial ETA of approximately 11-12.5 hours.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-fwlr2e5-ns5r1-stgr1-v9/20260901003749/hf-417`.
-- Planned completion checks: final HF checkpoint, gate/FW deltas against zero-gate initialization, original ViT/LM/projector integrity, loss/gradient/clipping behavior, TimeLens-held-out grounding evaluation, and fixed core regression suite.
+- Expected artifact if completed: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-fwlr2e5-ns5r1-stgr1-v9/20260901003749/hf-417`.
+
+The user stopped v9 at step 87 to prioritize macro temporal compression. All training and watchdog processes exited and all eight GPUs were released. The last completed global CE was `0.43793`; no step-100 DCP or HF checkpoint had been reached, so there is no artifact to resume or evaluate.
+
+## Macro Temporal Compression - Untrained Base Sweep
+
+**Status:** Implemented and completed. R=1 is exact Base parity; R=2 is the only plausible compression candidate, while R=4/8 significantly degrade the frozen Base.
+
+- Implementation: `macro_temporal_compression_factor` accepts `1/2/4/8`. The original four-frame `temporal_merge_size=4`, complete vision encoder, `final_layernorm`, and `patch_merger` remain unchanged. Base then means equal spatial positions over each per-video macro group; LACT runs every chunk through every layer with continuous FW state and only then keeps the last final output in each group. Tail groups remain within their video and use their actual members. R=1 returns the original output list without tensor arithmetic.
+- Prompt alignment: the XTuner tokenizer and exported LACT HF processor emit one mean group timestamp and one spatial placeholder block per retained macro group. Model, tokenizer, training config, and HF export serialize the same factor. LACT retains explicit `continuous` and inference-only `reset_state` modes; compression is downstream of either scan.
+- Reproducible implementation: `xtuner-videochat3/xtuner/v1/model/compose/videochat3/macro_temporal.py`, the Base/LACT vision models, and `scripts/eval_videochat3_macro_temporal_compression.py`; eight-GPU launcher `scripts/eval_videochat3_base_macro_temporal_compression.sh`.
+- Protocol: unmodified `/mnt/localssd/VideoChat3/VideoChat3-4B`, the identical seed-42 Video-MME Long sample used by prior teacher-forced probes, 96 videos and three one-token-answer questions per video, for 288 paired questions. All cached inputs contain 1,024 frames. Confidence intervals use 10,000 bootstrap resamples clustered by video.
+- Native artifacts: `/mnt/localssd/VideoChat3/eval/base-macro-temporal-compression`. Eight rank files contain exactly 288 unique rows over 96 videos; the GPU-exclusive watchdog exited cleanly. Every inference asserts projected feature count equals both the layout-derived expected count and the LLM video-placeholder count.
+
+R=1 independently calls the unchanged checkpoint vision/projector path and the new macro path. Across all 96 videos and 288 questions, projected features are bitwise equal, input IDs are identical, and maximum absolute NLL and correct-answer-probability deltas are both exactly zero.
+
+| Factor | Mean NLL | Median NLL | Mean / median correct-answer probability | Mean / median visual tokens | Actual compression |
+|---:|---:|---:|---:|---:|---:|
+| R=1 | `1.27245` | `0.62638` | `51.83% / 53.45%` | `61,333 / 61,440` | `1.00x` |
+| R=2 | `1.30354` | `0.73559` | `50.20% / 47.92%` | `30,667 / 30,720` | `2.00x` |
+| R=4 | `1.38292` | `0.79630` | `48.19% / 45.10%` | `15,333 / 15,360` | `4.00x` |
+| R=8 | `1.45071` | `0.89962` | `46.51% / 40.67%` | `7,667 / 7,680` | `8.00x` |
+
+| Paired contrast | Mean / median NLL delta | NLL video-cluster 95% CI | Mean probability delta | Probability video-cluster 95% CI |
+|---|---:|---:|---:|---:|
+| R=2 - R=1 | `+0.03109 / +0.00071` | `[-0.02463, +0.08601]` | `-1.64 pp` | `[-3.04, -0.30] pp` |
+| R=4 - R=1 | `+0.11047 / +0.01005` | `[+0.02685, +0.19559]` | `-3.64 pp` | `[-5.86, -1.57] pp` |
+| R=8 - R=1 | `+0.17826 / +0.02332` | `[+0.06496, +0.29705]` | `-5.32 pp` | `[-7.75, -2.96] pp` |
+
+Conclusion: post-hoc mean compression has a monotonic cost on this frozen Base. R=4 and R=8 are ruled out as a no-training default by significant NLL and probability regressions. R=2 halves the dominant visual-token context; its mean NLL increase is not statistically resolved, but its mean correct-answer probability falls by a small, significant `1.64` points. If compression is required for the next controlled Base/LACT training comparison, R=2 is the conservative choice; keep R=1 for strict capability parity and do not treat untrained R=2 as lossless.
