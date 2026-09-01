@@ -37,6 +37,12 @@ metadata_path = Path(
 )
 dataset_tag = os.getenv("VIDEOCHAT3_STAGE3_DATASET_TAG", "stage3-full-local")
 training_tag = os.getenv("VIDEOCHAT3_TRAINING_TAG")
+parallel_strategy = os.getenv("VIDEOCHAT3_PARALLEL_STRATEGY", "fsdp")
+if parallel_strategy not in ("fsdp", "ddp"):
+    raise ValueError(
+        "VIDEOCHAT3_PARALLEL_STRATEGY must be 'fsdp' or 'ddp', got "
+        f"{parallel_strategy!r}"
+    )
 work_dir = Path("work_dir/stage3") / run_name
 cache_dir = Path(
     os.getenv(
@@ -201,6 +207,7 @@ fsdp_cfg = FSDPConfig(
     sp_size=1,
     recompute_ratio=recompute_ratio,
     torch_compile=False,
+    hsdp_sharding_size=1 if parallel_strategy == "ddp" else None,
 )
 
 trainer = TrainerConfig(
@@ -227,6 +234,7 @@ trainer = TrainerConfig(
                     "videochat3-4b",
                     "lact",
                     "fast-weight",
+                    f"parallel-{parallel_strategy}",
                     "fw-window-4",
                     f"memory-{model_cfg.vision_config.memory_type}",
                     f"inner-{model_cfg.vision_config.inner_optim}",
