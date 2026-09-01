@@ -1366,84 +1366,69 @@ class VideoChat3LACTVisionEncoder(nn.Module):
             torch.stack([layer.beta_proj.weight for layer in layers]),
         )
 
-    def _forward_linear_layer_group(
+    def _forward_linear_all_layers_chunk(
         self,
-        hidden_states: torch.Tensor,
-        rope_freqs_cis: torch.Tensor,
+        chunk_hidden: torch.Tensor,
+        chunk_rope: torch.Tensor,
+        states: torch.Tensor,
         *,
         wrapped_layers,
         layers,
-        clip_slices,
-        video_clip_counts,
-        clip_cu_seqlens,
-    ) -> torch.Tensor:
-        update_weights, value_weights, beta_weights = (
-            self._stack_linear_update_parameters(layers)
-        )
-        full_group = len(layers) == self.fw_update_layer_group_size
-        group_outputs = []
-        clip_index = 0
-        reset_state = layers[0].lact_inference_state_mode == "reset_state"
-        if reset_state and self.training:
-            raise RuntimeError("reset_state is an inference-only LACT state mode")
-        for clip_count in video_clip_counts:
-            states = torch.stack(
-                [layer.init_linear_state(batch_size=1) for layer in layers]
+        chunk_cu_seqlens,
+        will_update: bool,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Run one chunk through every layer, then batch all state updates."""
+        memory_inputs = []
+        for layer_index, wrapped_layer in enumerate(wrapped_layers):
+            chunk_hidden, memory_input = wrapped_layer(
+                chunk_hidden,
+                chunk_cu_seqlens,
+                chunk_rope,
+                chunk_linear_state=states[layer_index],
             )
-            for video_clip_index in range(clip_count):
-                will_update = not reset_state and video_clip_index + 1 < clip_count
-                state_ratio_context = None
-                if will_update and layers[0].clip_state_grad_ratio:
-                    state_ratio_context = _StateGradRatioContext()
-                    group_states = _BoundPreviousLinearStateGradient.apply(
-                        states,
-                        state_ratio_context,
-                    )
-                else:
-                    group_states = states
+            memory_inputs.append(memory_input)
 
-                start, end = clip_slices[clip_index]
-                chunk_hidden = hidden_states[start:end]
-                chunk_rope = rope_freqs_cis[start:end]
-                memory_inputs = []
-                for layer_index, wrapped_layer in enumerate(wrapped_layers):
-                    chunk_hidden, memory_input = wrapped_layer(
-                        chunk_hidden,
-                        clip_cu_seqlens[clip_index],
-                        chunk_rope,
-                        chunk_linear_state=group_states[layer_index],
-                    )
-                    memory_inputs.append(memory_input)
+        if not will_update:
+            return chunk_hidden, states
 
-                if will_update:
-                    args = (
-                        torch.stack(memory_inputs),
-                        group_states,
-                        update_weights,
-                        value_weights,
-                        beta_weights,
-                        layers[0].base_lr_inverse,
-                        layers[0].memory.inner_optim,
-                        layers[0].muon_update_steps,
-                        layers[0].memory.clip_ns_grad_ratio,
-                        layers[0].memory.recompute_ns5_backward,
-                    )
-                    if chunk_hidden.is_cuda and full_group:
-                        states = self._compiled_batched_update_linear_states(*args)
-                    else:
-                        states = self._batched_update_linear_states(*args)
-                    if state_ratio_context is not None:
-                        states = _CaptureNextLinearStateGradient.apply(
-                            states,
-                            state_ratio_context,
-                        )
-                group_outputs.append(chunk_hidden)
-                clip_index += 1
-        if clip_index != len(clip_slices):
-            raise ValueError(
-                f"Consumed {clip_index} clips, but layout contains {len(clip_slices)}"
+        memory_inputs = torch.stack(memory_inputs)
+        updated_state_groups = []
+        for layer_start in range(
+            0,
+            len(layers),
+            self.fw_update_layer_group_size,
+        ):
+            layer_end = min(
+                layer_start + self.fw_update_layer_group_size,
+                len(layers),
             )
-        return torch.cat(group_outputs, dim=0)
+            update_layers = layers[layer_start:layer_end]
+            update_weights, value_weights, beta_weights = (
+                self._stack_linear_update_parameters(update_layers)
+            )
+            args = (
+                memory_inputs[layer_start:layer_end],
+                states[layer_start:layer_end],
+                update_weights,
+                value_weights,
+                beta_weights,
+                update_layers[0].base_lr_inverse,
+                update_layers[0].memory.inner_optim,
+                update_layers[0].muon_update_steps,
+                update_layers[0].memory.clip_ns_grad_ratio,
+                update_layers[0].memory.recompute_ns5_backward,
+            )
+            full_group = (
+                layer_end - layer_start == self.fw_update_layer_group_size
+            )
+            if chunk_hidden.is_cuda and full_group:
+                updated_states = self._compiled_batched_update_linear_states(
+                    *args
+                )
+            else:
+                updated_states = self._batched_update_linear_states(*args)
+            updated_state_groups.append(updated_states)
+        return chunk_hidden, torch.cat(updated_state_groups, dim=0)
 
     def _forward_cross_layer_linear_groups(
         self,
@@ -1453,42 +1438,68 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         video_clip_counts: list[int],
         clip_cu_seqlens: list[torch.Tensor],
     ) -> torch.Tensor:
-        for layer_start in range(
-            0,
-            len(self.blocks),
-            self.fw_update_layer_group_size,
-        ):
-            layer_end = min(
-                layer_start + self.fw_update_layer_group_size,
-                len(self.blocks),
+        wrapped_layers = tuple(self.blocks)
+        layers = tuple(self._unwrap_layer(layer) for layer in wrapped_layers)
+        reset_state = layers[0].lact_inference_state_mode == "reset_state"
+        if reset_state and self.training:
+            raise RuntimeError("reset_state is an inference-only LACT state mode")
+
+        outputs = []
+        clip_index = 0
+        for clip_count in video_clip_counts:
+            states = torch.stack(
+                [layer.init_linear_state(batch_size=1) for layer in layers]
             )
-            wrapped_layers = tuple(self.blocks[layer_start:layer_end])
-            layers = tuple(
-                self._unwrap_layer(layer) for layer in wrapped_layers
-            )
-            group_forward = partial(
-                self._forward_linear_layer_group,
-                wrapped_layers=wrapped_layers,
-                layers=layers,
-                clip_slices=clip_slices,
-                video_clip_counts=video_clip_counts,
-                clip_cu_seqlens=clip_cu_seqlens,
-            )
-            if (
-                self.cross_layer_checkpoint
-                and self.training
-                and torch.is_grad_enabled()
-            ):
-                hidden_states = checkpoint.checkpoint(
-                    group_forward,
-                    hidden_states,
-                    rope_freqs_cis,
-                    preserve_rng_state=self.checkpoint_preserve_rng_state,
-                    use_reentrant=False,
+            for video_clip_index in range(clip_count):
+                will_update = not reset_state and video_clip_index + 1 < clip_count
+                state_ratio_context = None
+                if will_update and layers[0].clip_state_grad_ratio:
+                    state_ratio_context = _StateGradRatioContext()
+                    chunk_states = _BoundPreviousLinearStateGradient.apply(
+                        states,
+                        state_ratio_context,
+                    )
+                else:
+                    chunk_states = states
+
+                start, end = clip_slices[clip_index]
+                chunk_forward = partial(
+                    self._forward_linear_all_layers_chunk,
+                    wrapped_layers=wrapped_layers,
+                    layers=layers,
+                    chunk_cu_seqlens=clip_cu_seqlens[clip_index],
+                    will_update=will_update,
                 )
-            else:
-                hidden_states = group_forward(hidden_states, rope_freqs_cis)
-        return hidden_states
+                args = (
+                    hidden_states[start:end],
+                    rope_freqs_cis[start:end],
+                    chunk_states,
+                )
+                if (
+                    self.cross_layer_checkpoint
+                    and self.training
+                    and torch.is_grad_enabled()
+                ):
+                    chunk_hidden, states = checkpoint.checkpoint(
+                        chunk_forward,
+                        *args,
+                        preserve_rng_state=self.checkpoint_preserve_rng_state,
+                        use_reentrant=False,
+                    )
+                else:
+                    chunk_hidden, states = chunk_forward(*args)
+                if state_ratio_context is not None:
+                    states = _CaptureNextLinearStateGradient.apply(
+                        states,
+                        state_ratio_context,
+                    )
+                outputs.append(chunk_hidden)
+                clip_index += 1
+        if clip_index != len(clip_slices):
+            raise ValueError(
+                f"Consumed {clip_index} clips, but layout contains {len(clip_slices)}"
+            )
+        return torch.cat(outputs, dim=0)
 
     def _forward_cross_layer_groups(
         self,
