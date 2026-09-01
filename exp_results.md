@@ -439,20 +439,20 @@ Checkpoint inspection: the 4,022,468,096 LM parameters are bitwise unchanged. Or
 
 ### Native Accuracy Evaluation
 
-v10 uses the same generation/scoring protocol as the fixed Base core suite. Native v10 artifacts are `/mnt/localssd/VideoChat3/eval/videochat3-base-r4-v10-core/VideoChat3-4B-Base-R4-v10/T20260901_G8f0c6cd1`. The missing untrained-R4 control was run only on Video-MME Long, as requested, with native artifacts at `/mnt/localssd/VideoChat3/eval/videochat3-base-r4-init-core/VideoChat3-4B-Base-R4-init/T20260901_Ga4d9ce25`.
+v10 uses the same generation/scoring protocol as the fixed Base core suite. Native v10 artifacts are `/mnt/localssd/VideoChat3/eval/videochat3-base-r4-v10-core/VideoChat3-4B-Base-R4-v10/T20260901_G8f0c6cd1`. Untrained-R4 native controls are split across the completed Long run at `/mnt/localssd/VideoChat3/eval/videochat3-base-r4-init-core/VideoChat3-4B-Base-R4-init/T20260901_Ga4d9ce25` and the Short/MVBench/MMBench completion run at `T20260901_G06342c03`.
 
 | Benchmark | Base R1 | Untrained Base R4 | v10 R4 | v10 - Base R1 | v10 - untrained R4 |
 |---|---:|---:|---:|---:|---:|
-| Video-MME Short | `80.70` | — | `72.60` | `-8.10` | — |
+| Video-MME Short | `80.70` | `72.80` | `72.60` | `-8.10` | `-0.20` |
 | Video-MME Long | `60.30` | `55.10` | `52.70` | `-7.60` | `-2.40` |
-| MVBench MP4 64-frame | `70.83` | — | `61.52` | `-9.31` | — |
-| MMBench DEV EN V1.1 | `35.91` | — | `28.79` | `-7.12` | — |
+| MVBench MP4 64-frame | `70.83` | `62.55` | `61.52` | `-9.31` | `-1.03` |
+| MMBench DEV EN V1.1 | `35.91` | `35.29` | `28.79` | `-7.12` | `-6.50` |
 
-Conclusion: four-way mean compression alone costs `5.20` points on Video-MME Long. Training the complete ViT and projector on the random-half TimeLens grounding data does not recover that loss and instead removes another `2.40` points. v10 also regresses `7.12-9.31` points on every other native-Accuracy guardrail, including the uncompressed image benchmark, so this one-epoch large-effective-source-batch recipe should not be used as the R4 initialization for further experiments.
+Conclusion: untrained R4 mean compression costs `7.90/5.20/8.28` points on Video-MME Short/Long and MVBench, while the image-only MMBench control changes by `-0.62`. Training the complete ViT and projector on random-half TimeLens recovers none of these gaps: v10 is another `0.20/2.40/1.03/6.50` points below the untrained R4 model on Short/Long/MVBench/MMBench. This one-epoch large-effective-source-batch recipe should not be used as the R4 initialization for further experiments.
 
 ## v11 - LACT R4 Token Select, FW + Projector, TimeLens Random Half
 
-**Status:** Configured; waiting for the untrained Base R4 core Accuracy run to release GPUs.
+**Status:** Training launched at 2026-09-01 07:14 UTC; provisional ETA is about 11-12 hours based on v9's measured full-epoch LACT workload over the identical 12,624 source videos.
 
 - Objective: test LACT's final-output token selection at R4 while adapting only the complete FW branch and multimodal projector. Every original four-frame chunk still traverses every LACT layer with continuous per-video state; only the final vision outputs retain the last chunk in each four-chunk macro group.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; no v10 or earlier trained checkpoint reuse. Original Base tensors are unchanged, private FW projections share-init from attention, and all 27 memory gates start at zero.
