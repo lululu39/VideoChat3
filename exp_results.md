@@ -452,7 +452,7 @@ Conclusion: untrained R4 mean compression costs `7.90/5.20/8.28` points on Video
 
 ## v11 - LACT R4 Token Select, FW + Projector, TimeLens Random Half
 
-**Status:** The initial 8K-pack launch failed before step 1 with CUDA OOM; a clean 2K-pack restart is configured.
+**Status:** The initial 8K-pack launch failed before step 1 with CUDA OOM; the clean 2K-pack restart launched at 2026-09-01 15:20 UTC with a provisional 10-12 hour ETA.
 
 - Objective: test LACT's final-output token selection at R4 while adapting only the complete FW branch and multimodal projector. Every original four-frame chunk still traverses every LACT layer with continuous per-video state; only the final vision outputs retain the last chunk in each four-chunk macro group.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; no v10 or earlier trained checkpoint reuse. Original Base tensors are unchanged, private FW projections share-init from attention, and all 27 memory gates start at zero.
