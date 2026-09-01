@@ -532,22 +532,11 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             self.muon_update_steps,
         )
 
-    @torch.compile(dynamic=True)
-    def _compiled_apply_memory_chunk(
-        self,
-        hidden_states: torch.Tensor,
-        fast_w0: torch.Tensor,
-        fast_w1: torch.Tensor,
-        fast_w2: torch.Tensor,
-    ):
-        return self.apply_memory(hidden_states, (fast_w0, fast_w1, fast_w2))
-
     def apply_memory_chunk(self, hidden_states: torch.Tensor, fast_weights):
-        if hidden_states.is_cuda:
-            return self._compiled_apply_memory_chunk(
-                hidden_states,
-                *fast_weights,
-            )
+        # Keep the recurrent training path eager. Compiling this per-chunk
+        # subgraph inside whole-layer activation checkpointing retains large
+        # AOTAutograd buffers across the long scan under FSDP without a
+        # measurable step-time gain.
         return self.apply_memory(hidden_states, fast_weights)
 
     def update_fast_weights_chunk(
@@ -678,7 +667,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
     ):
         args = (hidden_states, cu_seqlens, rope_freqs_cis, *fast_weights)
         # Compiling FlashAttention together with the large slow MLP regresses
-        # the real 1152-wide model. The memory apply inside remains compiled.
+        # the real 1152-wide model.
         return self._forward_chunk(*args)
 
     def forward(
