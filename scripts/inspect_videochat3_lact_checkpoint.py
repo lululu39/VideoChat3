@@ -128,17 +128,20 @@ def compare_checkpoints(init_dir: Path, trained_dir: Path) -> dict:
         init_handles.clear()
         trained_handles.clear()
 
-    gates = torch.cat(gate_values)
-    gate_abs = gates.abs()
-    quantiles = torch.quantile(
-        gate_abs,
-        torch.tensor([0.5, 0.9, 0.99], dtype=gate_abs.dtype),
-    )
-    return {
+    result = {
         "initial_checkpoint": str(init_dir.resolve()),
         "trained_checkpoint": str(trained_dir.resolve()),
         "groups": {name: finalize(stats) for name, stats in sorted(grouped.items())},
-        "memory_gate": {
+        "memory_gate": None,
+    }
+    if gate_values:
+        gates = torch.cat(gate_values)
+        gate_abs = gates.abs()
+        quantiles = torch.quantile(
+            gate_abs,
+            torch.tensor([0.5, 0.9, 0.99], dtype=gate_abs.dtype),
+        )
+        result["memory_gate"] = {
             "parameters": gates.numel(),
             "rms": torch.sqrt(torch.mean(gates.square())).item(),
             "mean_abs": torch.mean(gate_abs).item(),
@@ -146,8 +149,8 @@ def compare_checkpoints(init_dir: Path, trained_dir: Path) -> dict:
             "median_abs": quantiles[0].item(),
             "p90_abs": quantiles[1].item(),
             "p99_abs": quantiles[2].item(),
-        },
-    }
+        }
+    return result
 
 
 def parse_args():

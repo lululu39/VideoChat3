@@ -1,0 +1,42 @@
+{
+  "model": {
+    "VideoChat3-4B-Base-R4-v10": {
+      "class": "VideoChat3",
+      "model_path": "/data/yibo/VideoChat3/xtuner-videochat3/work_dir/stage3/vc3-4b-base-r4mean-vitproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-v10/20260901040051/hf-93",
+      "use_custom_prompt": false,
+      "use_vllm": false,
+      "max_new_tokens": 64
+    }
+  },
+  "data": {
+    "Video-MME_short_2fps_limit_1024_448px_80kctx": {
+      "class": "VideoMME",
+      "dataset": "Video-MME",
+      "fps": 2.0,
+      "duration_filter": "short",
+      "frames_limit": 1024,
+      "min_pixels": 784,
+      "max_pixels": 200704,
+      "total_pixels": 125440000
+    },
+    "Video-MME_long_2fps_limit_1024_448px_80kctx": {
+      "class": "VideoMME",
+      "dataset": "Video-MME",
+      "fps": 2.0,
+      "duration_filter": "long",
+      "frames_limit": 1024,
+      "min_pixels": 784,
+      "max_pixels": 200704,
+      "total_pixels": 125440000
+    },
+    "MVBench_MP4_64frame": {
+      "class": "MVBench_MP4",
+      "dataset": "MVBench_MP4",
+      "nframe": 64
+    },
+    "MMBench_DEV_EN_V11": {
+      "class": "ImageMCQDataset",
+      "dataset": "MMBench_DEV_EN_V11"
+    }
+  }
+}

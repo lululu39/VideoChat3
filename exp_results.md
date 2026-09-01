@@ -473,7 +473,7 @@ Across all three video probes, R=2 is consistently the least damaging setting: i
 
 ## v10 - Base R4 Mean Compression, ViT + Projector, TimeLens Random Half
 
-**Status:** Training in progress; startup validated through step 3/93.
+**Status:** Training completed at step 93/93; checkpoint inspection passed and core evaluation is pending.
 
 - Objective: test whether jointly adapting the complete Base vision tower and multimodal projector can recover capability after four-way macro temporal mean compression. This run contains no LACT encoder or fast-weight parameters.
 - Initialization: pinned unmodified `/mnt/localssd/VideoChat3/VideoChat3-4B`; `temporal_merge_size=4` remains unchanged and `macro_temporal_compression_factor=4` is applied after the complete vision encoder, final layer norm, and existing patch merger.
@@ -487,3 +487,7 @@ Across all three video probes, R=2 is consistently the least damaging setting: i
 - Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-base-r4mean-vitproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-v10/20260901040051`.
 - Startup validation: rank 0 reports only the original ViT (`416.0M` displayed) and projector (`33.0M`) as trainable, with zero LACT/LM parameters. Both live optimizer groups follow `0 -> 1e-5 -> 2e-5` over steps 1-3. Global CE is `0.64393/0.62490/0.60316`; pre-clip global norms are `9.708/9.090/8.183`, so global clip 1.0 is active on every observed step. There is no NaN, OOM, or placeholder mismatch; maximum allocated memory is below `49.0 GB`, and stable steps take about 25.6 seconds for an initial ETA near 38-40 minutes.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-base-r4mean-vitproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-v10/20260901040051/hf-93`. The HF save exports matching macro vision and processor code so R4 checkpoints load with synchronized visual-token and placeholder counts.
+
+Training completed all 93 steps in about 44 minutes after startup/cache construction. First/last-19 global CE means are `0.40255/0.31829`; the first/final losses are `0.64393/0.32220`. Pre-clip global norm has mean `3.201`, median `2.576`, and maximum `12.600`; all 93 steps exceed 1 and use the global clip. Stable step time averages `26.30` seconds and maximum allocated memory is `48.14 GB`.
+
+Checkpoint inspection: the 4,022,468,096 LM parameters are bitwise unchanged. Original attention, original MLP, other vision, and projector relative L2 deltas are respectively `0.4576%/0.2186%/0.0152%/0.8570%`; all intended trainable groups contain changed tensors. Native inspection is `20260901040051/checkpoint_inspection.json`. The post-save audit caught the generic processor save overwriting the custom R4 processor metadata after model export; `hf-93` was repaired without touching weights, now loads `VideoChat3MacroConfig` plus `VideoChat3MacroProcessor` with factor 4, and the engine export order is fixed for future saves.

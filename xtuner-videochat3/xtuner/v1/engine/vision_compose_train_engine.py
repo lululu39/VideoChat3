@@ -236,6 +236,13 @@ class VisionComposeTrainEngine(TrainEngine):
         super().save_hf(hf_dir, save_dtype)
         if self._processor is not None:
             self._processor.save_pretrained(hf_dir)
+        export_custom_hf_artifacts = getattr(
+            self.model,
+            "export_custom_hf_artifacts",
+            None,
+        )
+        if export_custom_hf_artifacts is not None:
+            export_custom_hf_artifacts(hf_dir)
 
     def train_step(self, data_batches: List[ModelItem]) -> tuple[LossLog, OtherLog]:
         """Perform a training step with the given data batches and mesh.

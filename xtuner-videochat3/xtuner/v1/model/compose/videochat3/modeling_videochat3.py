@@ -177,6 +177,10 @@ class VideoChat3ForConditionalGeneration(BaseModel):
         save_dtype: torch.dtype = torch.bfloat16,
     ) -> None:
         super().save_hf(hf_dir=hf_dir, save_dtype=save_dtype)
+        self.export_custom_hf_artifacts(hf_dir)
+
+    def export_custom_hf_artifacts(self, hf_dir: str | Path) -> None:
+        """Finalize custom model/processor files after generic HF asset saves."""
         if isinstance(self.config.vision_config, VideoChat3LACTVisionConfig):
             if not dist.is_initialized() or dist.get_rank() == 0:
                 from .hf_lact_export import export_lact_hf_artifacts
