@@ -52,6 +52,7 @@ def export_lact_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
         "fw_share_init",
         "fw_norm_epsilon",
         "clip_ns_grad_ratio",
+        "recompute_ns5_backward",
         "clip_state_grad_ratio",
         "fw_update_layer_group_size",
         "lact_inference_state_mode",

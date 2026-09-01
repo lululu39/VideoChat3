@@ -116,6 +116,35 @@ class _NS5WithBoundedBackward(torch.autograd.Function):
         return exact_grad * scale.to(exact_grad.dtype), None
 
 
+class _NS5WithRecomputedBackward(torch.autograd.Function):
+    """Checkpoint NS5 internals while returning the exact, unclipped VJP."""
+
+    @staticmethod
+    def forward(ctx, matrix: torch.Tensor, steps: int) -> torch.Tensor:
+        ctx.steps = int(steps)
+        ctx.save_for_backward(matrix)
+        return _zeropower_via_newtonschulz5_impl(matrix, ctx.steps)
+
+    @staticmethod
+    def backward(ctx, grad_update: torch.Tensor):
+        (matrix,) = ctx.saved_tensors
+        if not ctx.needs_input_grad[0]:
+            return None, None
+        with torch.enable_grad():
+            recomputed_matrix = matrix.detach().requires_grad_(True)
+            recomputed_update = _zeropower_via_newtonschulz5_impl(
+                recomputed_matrix,
+                ctx.steps,
+            )
+            (exact_grad,) = torch.autograd.grad(
+                recomputed_update,
+                recomputed_matrix,
+                grad_update,
+                create_graph=False,
+            )
+        return exact_grad, None
+
+
 class _StateGradRatioContext:
     def __init__(self):
         self.next_state_grad_norm = None
@@ -218,11 +247,16 @@ def zeropower_via_newtonschulz5(
     steps: int = 5,
     *,
     clip_ns_grad_ratio: bool = False,
+    recompute_ns5_backward: bool = True,
 ) -> torch.Tensor:
-    """VideoLACT NS5 with an optional non-expansive local backward."""
-    if steps == 0 or not clip_ns_grad_ratio or not matrix.requires_grad:
+    """VideoLACT NS5 with independent exact-backward checkpointing."""
+    if steps == 0 or not matrix.requires_grad:
         return _zeropower_via_newtonschulz5_impl(matrix, steps)
-    return _NS5WithBoundedBackward.apply(matrix, steps)
+    if clip_ns_grad_ratio:
+        return _NS5WithBoundedBackward.apply(matrix, steps)
+    if recompute_ns5_backward:
+        return _NS5WithRecomputedBackward.apply(matrix, steps)
+    return _zeropower_via_newtonschulz5_impl(matrix, steps)
 
 
 class FastWeightSwiGLU(nn.Module):
@@ -236,6 +270,7 @@ class FastWeightSwiGLU(nn.Module):
         share_proj: bool = False,
         norm_epsilon: float = 1e-5,
         clip_ns_grad_ratio: bool = False,
+        recompute_ns5_backward: bool = True,
     ):
         super().__init__()
         if num_heads <= 0:
@@ -250,6 +285,7 @@ class FastWeightSwiGLU(nn.Module):
         self.hidden_dim = int(dim * inter_multi)
         self.share_proj = share_proj
         self.clip_ns_grad_ratio = clip_ns_grad_ratio
+        self.recompute_ns5_backward = recompute_ns5_backward
 
         if share_proj:
             self.apply_proj = None
@@ -410,6 +446,7 @@ class FastWeightSwiGLU(nn.Module):
             muon_gradients.flatten(0, 2),
             muon_update_steps,
             clip_ns_grad_ratio=self.clip_ns_grad_ratio,
+            recompute_ns5_backward=self.recompute_ns5_backward,
         ).reshape_as(muon_gradients)
         w0_update, w1_update_oriented, w2_update = muon_updates.unbind(0)
         if transpose_w02:
@@ -447,6 +484,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         fw_share_init: bool = True,
         fw_norm_epsilon: float = 1e-5,
         clip_ns_grad_ratio: bool = False,
+        recompute_ns5_backward: bool = True,
         clip_state_grad_ratio: bool = True,
         lact_inference_state_mode: str = "continuous",
     ):
@@ -472,6 +510,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             share_proj=fw_share_proj,
             norm_epsilon=fw_norm_epsilon,
             clip_ns_grad_ratio=clip_ns_grad_ratio,
+            recompute_ns5_backward=recompute_ns5_backward,
         )
         self.value_proj = None if fw_share_proj else nn.Linear(hidden_dim, hidden_dim, bias=False)
         self.memory_gate = nn.Parameter(torch.zeros(hidden_dim))
@@ -714,6 +753,7 @@ class VideoChat3LACTVisionModel(VideoChat3VisionPreTrainedModel):
                 "fw_share_init": config.fw_share_init,
                 "fw_norm_epsilon": config.fw_norm_epsilon,
                 "clip_ns_grad_ratio": config.clip_ns_grad_ratio,
+                "recompute_ns5_backward": config.recompute_ns5_backward,
                 "clip_state_grad_ratio": config.clip_state_grad_ratio,
                 "lact_inference_state_mode": config.lact_inference_state_mode,
             },

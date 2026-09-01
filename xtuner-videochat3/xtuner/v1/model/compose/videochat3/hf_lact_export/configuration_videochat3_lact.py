@@ -18,6 +18,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         fw_share_init: bool = True,
         fw_norm_epsilon: float = 1e-5,
         clip_ns_grad_ratio: bool = False,
+        recompute_ns5_backward: bool = True,
         clip_state_grad_ratio: bool = True,
         fw_update_layer_group_size: int = 1,
         macro_temporal_compression_factor: int = 1,
@@ -63,6 +64,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         self.fw_share_init = fw_share_init
         self.fw_norm_epsilon = fw_norm_epsilon
         self.clip_ns_grad_ratio = clip_ns_grad_ratio
+        self.recompute_ns5_backward = recompute_ns5_backward
         self.clip_state_grad_ratio = clip_state_grad_ratio
         self.fw_update_layer_group_size = fw_update_layer_group_size
         self.macro_temporal_compression_factor = macro_temporal_compression_factor

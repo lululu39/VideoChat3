@@ -63,6 +63,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
     fw_share_init: bool = True
     fw_norm_epsilon: float = 1e-5
     clip_ns_grad_ratio: bool = False
+    recompute_ns5_backward: bool = True
     clip_state_grad_ratio: bool = True
     fw_update_layer_group_size: int = 1
     lact_inference_state_mode: Literal["continuous", "reset_state"] = "continuous"

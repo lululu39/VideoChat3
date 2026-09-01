@@ -58,6 +58,7 @@ if model_variant == "lact":
         vision_config=VideoChat3LACTVisionConfig(
             attn_impl="flash_attention_2",
             clip_ns_grad_ratio=False,
+            recompute_ns5_backward=True,
             clip_state_grad_ratio=True,
             fw_update_layer_group_size=int(
                 os.getenv("VIDEOCHAT3_FW_UPDATE_LAYER_GROUP_SIZE", "1")
@@ -222,6 +223,7 @@ trainer = TrainerConfig(
                     "fast-weight",
                     "fw-window-4",
                     "ns5-exact-backward",
+                    "ns5-backward-recompute",
                     "state-ratio-clip-rho1",
                     f"fw-layer-batch-{model_cfg.vision_config.fw_update_layer_group_size}",
                     (

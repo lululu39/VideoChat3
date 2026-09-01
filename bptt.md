@@ -417,6 +417,7 @@ $$
 
 ```python
 clip_ns_grad_ratio = False  # 历史复现开关；新实验默认关闭
+recompute_ns5_backward = True  # 仅做 exact VJP 局部重算，不裁剪 NS5 梯度
 ```
 
 NS5 forward 完全不变：
