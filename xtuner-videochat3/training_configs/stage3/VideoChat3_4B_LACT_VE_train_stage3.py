@@ -6,8 +6,11 @@ from xtuner.v1.config import FSDPConfig, LRConfig, VisionAdamWConfig
 from xtuner.v1.datasets import VideoChat3TokenizeFnConfig
 from xtuner.v1.datasets.config import DataloaderConfig, DatasetConfig
 from xtuner.v1.loss import CELossConfig
-from xtuner.v1.model import VideoChat3LACTDense4BConfig
-from xtuner.v1.model.compose.videochat3 import VideoChat3LACTVisionConfig
+from xtuner.v1.model import VideoChat3Dense4BConfig, VideoChat3LACTDense4BConfig
+from xtuner.v1.model.compose.videochat3 import (
+    VideoChat3LACTVisionConfig,
+    VideoChat3VisionConfig,
+)
 from xtuner.v1.train import ResumeConfig, TrainerConfig, WandbConfig
 
 
@@ -44,17 +47,31 @@ cache_dir = Path(
 macro_temporal_compression_factor = int(
     os.getenv("VIDEOCHAT3_MACRO_TEMPORAL_COMPRESSION_FACTOR", "1")
 )
+model_variant = os.getenv("VIDEOCHAT3_MODEL_VARIANT", "lact")
 
-model_cfg = VideoChat3LACTDense4BConfig(
-    train_lact_only=env_bool("VIDEOCHAT3_TRAIN_LACT_ONLY"),
-    freeze_lact_memory_gate=env_bool("VIDEOCHAT3_FREEZE_LACT_MEMORY_GATE"),
-    vision_config=VideoChat3LACTVisionConfig(
-        attn_impl="flash_attention_2",
-        clip_ns_grad_ratio=True,
-        clip_state_grad_ratio=True,
-        macro_temporal_compression_factor=macro_temporal_compression_factor,
+if model_variant == "lact":
+    model_cfg = VideoChat3LACTDense4BConfig(
+        train_lact_only=env_bool("VIDEOCHAT3_TRAIN_LACT_ONLY"),
+        freeze_lact_memory_gate=env_bool("VIDEOCHAT3_FREEZE_LACT_MEMORY_GATE"),
+        vision_config=VideoChat3LACTVisionConfig(
+            attn_impl="flash_attention_2",
+            clip_ns_grad_ratio=True,
+            clip_state_grad_ratio=True,
+            macro_temporal_compression_factor=macro_temporal_compression_factor,
+        ),
     )
-)
+elif model_variant == "base-vit-projector":
+    model_cfg = VideoChat3Dense4BConfig(
+        freeze_vision=False,
+        freeze_projector=False,
+        freeze_language=True,
+        vision_config=VideoChat3VisionConfig(
+            attn_impl="flash_attention_2",
+            macro_temporal_compression_factor=macro_temporal_compression_factor,
+        ),
+    )
+else:
+    raise ValueError(f"Unsupported VIDEOCHAT3_MODEL_VARIANT={model_variant!r}")
 
 sample_max_length = 8192
 pack_max_length = 8192
@@ -186,19 +203,34 @@ trainer = TrainerConfig(
         name=run_name,
         base_url="https://api.wandb.ai",
         run_id=os.getenv("WANDB_RUN_ID", run_name),
-        group="videochat3-lact-stage3-ve",
+        group=(
+            "videochat3-lact-stage3-ve"
+            if model_variant == "lact"
+            else "videochat3-base-stage3-vit-projector"
+        ),
         job_type="train",
         tags=(
-            [
-                "videochat3-4b",
-                "lact",
-                "fast-weight",
-                "fw-window-4",
-                "ns5-ratio-clip-rho1",
-                "state-ratio-clip-rho1",
-                "vision-encoder-only",
-                dataset_tag,
-            ]
+            (
+                [
+                    "videochat3-4b",
+                    "lact",
+                    "fast-weight",
+                    "fw-window-4",
+                    "ns5-ratio-clip-rho1",
+                    "state-ratio-clip-rho1",
+                    "vision-encoder-only",
+                    dataset_tag,
+                ]
+                if model_variant == "lact"
+                else [
+                    "videochat3-4b",
+                    "base",
+                    "macro-temporal-mean",
+                    f"macro-r{macro_temporal_compression_factor}",
+                    "vit-projector",
+                    dataset_tag,
+                ]
+            )
             + ([training_tag] if training_tag else [])
         ),
         resume="allow",

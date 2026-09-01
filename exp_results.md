@@ -470,3 +470,18 @@ Native artifacts: `/mnt/localssd/VideoChat3/eval/base-macro-temporal-compression
 | MVBench R=8 - R=1 | `+0.21678` | `[-0.00749, +0.52337]` | `-10.36 pp` | `[-16.65, -5.96] pp` |
 
 Across all three video probes, R=2 is consistently the least damaging setting: it is statistically flat on MVBench and its NLL interval still crosses zero on both Video-MME duration slices, although both Video-MME slices show a small significant probability decrease. R=4/8 cause reliable degradation in at least one metric on every probe. The Short run also exercises real incomplete macro tails: realized ratios are below nominal R while feature/placeholder counts remain exact. This strengthens R=2 as the only reasonable compressed training candidate, without changing the strict-parity default of R=1.
+
+## v10 - Base R4 Mean Compression, ViT + Projector, TimeLens Random Half
+
+**Status:** Configured; awaiting startup validation.
+
+- Objective: test whether jointly adapting the complete Base vision tower and multimodal projector can recover capability after four-way macro temporal mean compression. This run contains no LACT encoder or fast-weight parameters.
+- Initialization: pinned unmodified `/mnt/localssd/VideoChat3/VideoChat3-4B`; `temporal_merge_size=4` remains unchanged and `macro_temporal_compression_factor=4` is applied after the complete vision encoder, final layer norm, and existing patch merger.
+- Data: the same deterministic seed-42 random-half TimeLens subset used by v9: 12,624 grounding rows over 8,985 videos from `/mnt/localssd/dataset/VideoChat3/TimeLens-100K/TimeLens100K_Visual_Random12624_VideoChat3.json`.
+- Trainable scope: all 416,870,640 original ViT parameters plus all 33,039,616 projector parameters, for 449,910,256 trainable parameters. The complete 4B language model is frozen; there are no LACT/FW parameters.
+- Optimizer and schedule: separate named `vit` and `projector` AdamW groups, both at the v4 LR `2e-5 -> 1e-6`, 3% warmup, cosine decay, weight decay 0, and one epoch.
+- Stabilization: true FSDP global gradient norm clipping at 1.0. NS5/state-adjoint clipping is inapplicable because this is the Base vision encoder.
+- Hardware and packing: 8xH100, global batch 16, 8K sample/pack length, TimeLens 2 FPS, 64-448 frames rounded to four, total-pixel budget 14,680,064, and R4-compressed timestamps/placeholders. The final pack/step count will be recorded after the new R4 cache is built.
+- Training W&B: [`v10`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-base-r4mean-vitproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-v10).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_BASE_ViTProj_train_timelens_v10.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-base-r4mean-vitproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-v10/<timestamp>/hf-<final-step>`. The HF save exports matching macro vision and processor code so R4 checkpoints load with synchronized visual-token and placeholder counts.

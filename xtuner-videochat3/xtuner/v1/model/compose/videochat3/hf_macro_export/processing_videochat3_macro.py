@@ -1,4 +1,4 @@
-"""Hugging Face processor for VideoChat3-LACT macro temporal outputs."""
+"""Hugging Face processor for macro-compressed VideoChat3 outputs."""
 
 from typing import Any
 
@@ -6,7 +6,7 @@ from .processing_videochat3 import VideoChat3Processor
 from .videochat3_utils import VideoChat3VideoMetadata  # noqa: F401
 
 
-class VideoChat3LACTProcessor(VideoChat3Processor):
+class VideoChat3MacroProcessor(VideoChat3Processor):
     def __init__(
         self,
         image_processor=None,
@@ -42,4 +42,4 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
         ]
 
 
-__all__ = ["VideoChat3LACTProcessor"]
+__all__ = ["VideoChat3MacroProcessor"]
