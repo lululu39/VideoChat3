@@ -397,7 +397,7 @@ Conclusion: larger positive FW amplitude does not recover hidden utility. `alpha
 
 ## v9 - Random-Half TimeLens Grounding, v4 FW-Only Recipe
 
-**Status:** Prepared for launch.
+**Status:** Training in progress; startup validated through step 2/417.
 
 - Objective: run the same clean temporal-grounding control as planned for v9 while reducing the approximately 22-24 hour full balanced run to roughly half that wall time. The stopped full-data attempt and its W&B run are intentionally removed from the experiment record.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; no prior checkpoint reuse. All 27 memory gates start at zero and every original Base tensor is bitwise unchanged.
@@ -406,9 +406,11 @@ Conclusion: larger positive FW amplitude does not recover hidden utility. `alpha
 - Trainable scope: exactly the v4 358,473,600 LACT-added parameters. Original ViT, multimodal projector, and LM remain frozen.
 - Optimizer and schedule: exact v4 settings for every LACT parameter including gates: uniform peak LR `2e-5`, minimum `1e-6`, 3% warmup, cosine decay, weight decay 0, and one epoch. No gate-specific or original-ViT group exists.
 - Stabilization: unchanged rho-1 NS5/state-adjoint clipping and true-global gradient norm clip at 1.0.
-- Hardware and packing: 8xH100, global batch 16, 8K packs, 2 FPS, 64-448 frames rounded to four, total-pixel budget 14,680,064, and at most 112 clips / 111 effective updates. Exact packed samples and optimizer steps will be recorded after startup cache construction; the expected count is approximately 417 steps.
+- Hardware and packing: 8xH100, global batch 16, 8K packs, 2 FPS, 64-448 frames rounded to four, total-pixel budget 14,680,064, and at most 112 clips / 111 effective updates. Deterministic caching packs the 12,624 rows into 6,658 samples for 417 optimizer steps, exactly half the stopped full-data run's step count.
 - Training W&B: [`v9`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-fw4-fwonly-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-fwlr2e5-ns5r1-stgr1-v9).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FW_train_timelens_v9.sh`.
 - Sampling utility and audit: `scripts/sample_timelens_videochat3.py`; `/mnt/localssd/dataset/VideoChat3/TimeLens-100K/timelens_100k_random_12624_summary.json`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-fwlr2e5-ns5r1-stgr1-v9/<timestamp>/hf-<final-step>`.
+- Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-fwlr2e5-ns5r1-stgr1-v9/20260901003749`.
+- Startup validation: all ranks loaded the random-half manifest and the exact v4 LACT-only optimizer scope. Steps 1-2 had global CE `0.45659/0.56457`, finite pre-clip norms `0.8699/0.7449` (neither required global clipping), expected warmup LR `0/1.6667e-6`, and maximum allocated memory about `45.26 GB`. The stable second step took about `101.2` seconds with no NaN, OOM, or media error, giving an initial ETA of approximately 11-12.5 hours.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-fw4-fwonly-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-fwlr2e5-ns5r1-stgr1-v9/20260901003749/hf-417`.
 - Planned completion checks: final HF checkpoint, gate/FW deltas against zero-gate initialization, original ViT/LM/projector integrity, loss/gradient/clipping behavior, TimeLens-held-out grounding evaluation, and fixed core regression suite.
