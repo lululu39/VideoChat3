@@ -513,7 +513,7 @@ Real 8xH100 FSDP/TimeLens smokes validate both linear variants and initializatio
 
 ## v12 - Linear16 + Delta R4, No FW Ratio Clip, TimeLens Random Half
 
-**Status:** Starting from the retained LACT initialization; no prior v12 checkpoint exists.
+**Status:** Active from the retained LACT initialization; no prior v12 checkpoint exists.
 
 - Objective: test whether chunk-level Linear+Delta avoids the `inf` recurrent gradient seen at step 3 for unclipped SwiGLU+Muon, while measuring end-to-end learning behavior rather than only systems speed.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; all original Base tensors load unchanged, the linear private Q/K/V/O branch is rebuilt by attention share-init, each per-video/per-layer linear state starts at zero, and every residual memory gate starts at zero.
@@ -526,3 +526,5 @@ Real 8xH100 FSDP/TimeLens smokes validate both linear variants and initializatio
 - Training W&B: [`v12`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s2k-lr2e5-nofwclip-v12).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_FWProj_train_timelens_r4_v12.sh`.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s2k-lr2e5-nofwclip-v12/<timestamp>/hf-<final-step>`.
+
+Startup validation passes the exact failure point of unclipped SwiGLU+Muon: v12 pre-clip global norms are `3.4528/3.3453/3.5551` on steps 1-3, all finite, whereas the controlled SwiGLU+Muon run gives `3.6351/3.3454/inf`. No optimizer step is skipped. Stable steps 2/3 take `39.27-39.30s` and `40.30-40.31s`; the observed maximum is `18.39 GB`. Native log: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s2k-lr2e5-nofwclip-v12/torchrun_logs/training_20260901_190523_datava270000004.log`.
