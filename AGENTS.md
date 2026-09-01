@@ -92,6 +92,7 @@
 
 ## Evaluation
 
+- All future model evaluations must use the benchmark's native generation-and-scoring protocol and report Accuracy. Do not run or record teacher-forced NLL, answer probability, or related surrogate metrics unless the user explicitly reverses this rule for a specific experiment.
 - The first base-vs-LACT evaluation uses `vlmevalkit-videochat3/configs/videochat3_lact_core_eval.json`: Video-MME short/long at 2 FPS (up to 1,024 frames), MVBench MP4 at 64 frames, and MMBench DEV EN V1.1 as an image-regression guardrail. Prepare public data under `/mnt/localssd/dataset/VLMEvalKit` with `scripts/prepare_videochat3_core_eval_data.py`, then launch eight-GPU resumable evaluation with `scripts/eval_videochat3_lact_core.sh`.
 - Core results are exported to a clean W&B bar-chart/table dashboard, with native predictions and scores retained in a separate raw artifact run; version-specific links and conclusions live in `exp_logs.md`.
 - Video-MME is the broad duration-stratified benchmark, MVBench checks short temporal skills, and MMBench detects image degradation. LVBench is the preferred second-wave extreme-long benchmark, but its public HF repository does not include the videos; do not substitute MLVU first because its roughly 430 GB download is disproportionate to the remaining local SSD space.

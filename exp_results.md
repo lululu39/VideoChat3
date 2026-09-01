@@ -416,61 +416,6 @@ Conclusion: larger positive FW amplitude does not recover hidden utility. `alpha
 
 The user stopped v9 at step 87 to prioritize macro temporal compression. All training and watchdog processes exited and all eight GPUs were released. The last completed global CE was `0.43793`; no step-100 DCP or HF checkpoint had been reached, so there is no artifact to resume or evaluate.
 
-## Macro Temporal Compression - Untrained Base Sweep
-
-**Status:** Implemented and completed. R=1 is exact Base parity; R=2 is the only plausible compression candidate, while R=4/8 significantly degrade the frozen Base.
-
-- Implementation: `macro_temporal_compression_factor` accepts `1/2/4/8`. The original four-frame `temporal_merge_size=4`, complete vision encoder, `final_layernorm`, and `patch_merger` remain unchanged. Base then means equal spatial positions over each per-video macro group; LACT runs every chunk through every layer with continuous FW state and only then keeps the last final output in each group. Tail groups remain within their video and use their actual members. R=1 returns the original output list without tensor arithmetic.
-- Prompt alignment: the XTuner tokenizer and exported LACT HF processor emit one mean group timestamp and one spatial placeholder block per retained macro group. Model, tokenizer, training config, and HF export serialize the same factor. LACT retains explicit `continuous` and inference-only `reset_state` modes; compression is downstream of either scan.
-- Reproducible implementation: `xtuner-videochat3/xtuner/v1/model/compose/videochat3/macro_temporal.py`, the Base/LACT vision models, and `scripts/eval_videochat3_macro_temporal_compression.py`; eight-GPU launcher `scripts/eval_videochat3_base_macro_temporal_compression.sh`.
-- Protocol: unmodified `/mnt/localssd/VideoChat3/VideoChat3-4B`, the identical seed-42 Video-MME Long sample used by prior teacher-forced probes, 96 videos and three one-token-answer questions per video, for 288 paired questions. All cached inputs contain 1,024 frames. Confidence intervals use 10,000 bootstrap resamples clustered by video.
-- Native artifacts: `/mnt/localssd/VideoChat3/eval/base-macro-temporal-compression`. Eight rank files contain exactly 288 unique rows over 96 videos; the GPU-exclusive watchdog exited cleanly. Every inference asserts projected feature count equals both the layout-derived expected count and the LLM video-placeholder count.
-
-R=1 independently calls the unchanged checkpoint vision/projector path and the new macro path. Across all 96 videos and 288 questions, projected features are bitwise equal, input IDs are identical, and maximum absolute NLL and correct-answer-probability deltas are both exactly zero.
-
-| Factor | Mean NLL | Median NLL | Mean / median correct-answer probability | Mean / median visual tokens | Actual compression |
-|---:|---:|---:|---:|---:|---:|
-| R=1 | `1.27245` | `0.62638` | `51.83% / 53.45%` | `61,333 / 61,440` | `1.00x` |
-| R=2 | `1.30354` | `0.73559` | `50.20% / 47.92%` | `30,667 / 30,720` | `2.00x` |
-| R=4 | `1.38292` | `0.79630` | `48.19% / 45.10%` | `15,333 / 15,360` | `4.00x` |
-| R=8 | `1.45071` | `0.89962` | `46.51% / 40.67%` | `7,667 / 7,680` | `8.00x` |
-
-| Paired contrast | Mean / median NLL delta | NLL video-cluster 95% CI | Mean probability delta | Probability video-cluster 95% CI |
-|---|---:|---:|---:|---:|
-| R=2 - R=1 | `+0.03109 / +0.00071` | `[-0.02463, +0.08601]` | `-1.64 pp` | `[-3.04, -0.30] pp` |
-| R=4 - R=1 | `+0.11047 / +0.01005` | `[+0.02685, +0.19559]` | `-3.64 pp` | `[-5.86, -1.57] pp` |
-| R=8 - R=1 | `+0.17826 / +0.02332` | `[+0.06496, +0.29705]` | `-5.32 pp` | `[-7.75, -2.96] pp` |
-
-Conclusion: post-hoc mean compression has a monotonic cost on this frozen Base. R=4 and R=8 are ruled out as a no-training default by significant NLL and probability regressions. R=2 halves the dominant visual-token context; its mean NLL increase is not statistically resolved, but its mean correct-answer probability falls by a small, significant `1.64` points. If compression is required for the next controlled Base/LACT training comparison, R=2 is the conservative choice; keep R=1 for strict capability parity and do not treat untrained R=2 as lossless.
-
-### Other Core Video Follow-up
-
-The same seed-42 teacher-forced sweep was run on the two remaining video core entries; MMBench was excluded because it is an image benchmark. Video-MME Short uses 96 videos and three questions each (288 questions), with 22-246 sampled frames in this subset. MVBench uses 96 distinct videos and 99 questions at its native fixed 64-frame setting; candidate text is normalized to the correct one-token answer letter. MVBench sampling explicitly reproduces VLMEvalKit's uniform 64-frame indices, including repeated indices when a source contains fewer than 64 frames. Both runs preserve exact R=1 feature/token/NLL parity, pass every projected-token/placeholder assertion, contain eight complete rank files, and have clean watchdog exits.
-
-Native artifacts: `/mnt/localssd/VideoChat3/eval/base-macro-temporal-compression-videomme-short` and `/mnt/localssd/VideoChat3/eval/base-macro-temporal-compression-mvbench64`.
-
-| Dataset / factor | Mean / median NLL | Mean correct-answer probability | Mean visual tokens | Actual compression |
-|---|---:|---:|---:|---:|
-| Video-MME Short R=1 | `0.59651 / 0.07904` | `75.29%` | `9,293` | `1.00x` |
-| Video-MME Short R=2 | `0.64970 / 0.10193` | `72.30%` | `4,715` | `1.97x` |
-| Video-MME Short R=4 | `0.82679 / 0.16031` | `67.67%` | `2,430` | `3.82x` |
-| Video-MME Short R=8 | `0.98870 / 0.36476` | `60.28%` | `1,263` | `7.36x` |
-| MVBench 64-frame R=1 | `0.92509 / 0.20426` | `64.74%` | `3,349` | `1.00x` |
-| MVBench 64-frame R=2 | `0.87015 / 0.20519` | `64.21%` | `1,674` | `2.00x` |
-| MVBench 64-frame R=4 | `0.95917 / 0.32376` | `61.48%` | `837` | `4.00x` |
-| MVBench 64-frame R=8 | `1.14187 / 0.61707` | `54.39%` | `419` | `8.00x` |
-
-| Dataset / contrast | Mean NLL delta | NLL video-cluster 95% CI | Mean probability delta | Probability video-cluster 95% CI |
-|---|---:|---:|---:|---:|
-| Video-MME Short R=2 - R=1 | `+0.05318` | `[-0.00628, +0.11090]` | `-2.99 pp` | `[-4.46, -1.44] pp` |
-| Video-MME Short R=4 - R=1 | `+0.23028` | `[+0.14143, +0.32417]` | `-7.62 pp` | `[-10.30, -5.07] pp` |
-| Video-MME Short R=8 - R=1 | `+0.39218` | `[+0.25983, +0.53577]` | `-15.01 pp` | `[-18.79, -11.45] pp` |
-| MVBench R=2 - R=1 | `-0.05494` | `[-0.12329, +0.02337]` | `-0.54 pp` | `[-2.23, +0.91] pp` |
-| MVBench R=4 - R=1 | `+0.03408` | `[-0.05206, +0.14097]` | `-3.26 pp` | `[-6.44, -0.75] pp` |
-| MVBench R=8 - R=1 | `+0.21678` | `[-0.00749, +0.52337]` | `-10.36 pp` | `[-16.65, -5.96] pp` |
-
-Across all three video probes, R=2 is consistently the least damaging setting: it is statistically flat on MVBench and its NLL interval still crosses zero on both Video-MME duration slices, although both Video-MME slices show a small significant probability decrease. R=4/8 cause reliable degradation in at least one metric on every probe. The Short run also exercises real incomplete macro tails: realized ratios are below nominal R while feature/placeholder counts remain exact. This strengthens R=2 as the only reasonable compressed training candidate, without changing the strict-parity default of R=1.
-
 ## v10 - Base R4 Mean Compression, ViT + Projector, TimeLens Random Half
 
 **Status:** Training completed at step 93/93; checkpoint inspection passed and core evaluation is pending.
