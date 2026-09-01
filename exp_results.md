@@ -452,7 +452,7 @@ Conclusion: untrained R4 mean compression costs `7.90/5.20/8.28` points on Video
 
 ## v11 - LACT R4 Token Select, FW + Projector, TimeLens Random Half
 
-**Status:** Training launched at 2026-09-01 07:14 UTC; provisional ETA is about 11-12 hours based on v9's measured full-epoch LACT workload over the identical 12,624 source videos.
+**Status:** The initial 8K-pack launch failed before step 1 with CUDA OOM; a clean 2K-pack restart is configured.
 
 - Objective: test LACT's final-output token selection at R4 while adapting only the complete FW branch and multimodal projector. Every original four-frame chunk still traverses every LACT layer with continuous per-video state; only the final vision outputs retain the last chunk in each four-chunk macro group.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; no v10 or earlier trained checkpoint reuse. Original Base tensors are unchanged, private FW projections share-init from attention, and all 27 memory gates start at zero.
@@ -460,7 +460,7 @@ Conclusion: untrained R4 mean compression costs `7.90/5.20/8.28` points on Video
 - Trainable scope: all 358,473,600 LACT/FW parameters, including gates, plus all 33,039,616 projector parameters, for 391,513,216 trainable parameters. The original ViT and complete 4B LM are frozen.
 - Optimizer and schedule: separate named `lact_fw` and `projector` AdamW groups, both using the v10 LR `2e-5 -> 1e-6`, 3% warmup, cosine decay, weight decay 0, and one epoch. There is no gate-specific LR.
 - Stabilization: rho-1 NS5 and state-adjoint clipping remain enabled, followed by true FSDP global gradient clipping at 1.0.
-- Hardware and packing: 8xH100, global batch 16, 8K sample/pack length, TimeLens 2 FPS, 64-448 frames rounded to four, total-pixel budget 14,680,064, and R4 token-select placeholders/timestamps. The factor-aware layout is expected to match v10's 1,485 packs and 93 optimizer steps.
-- Training W&B: [`v11`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-v11).
+- Hardware and packing: 8xH100, global batch 16, 2K sample/pack length, TimeLens 2 FPS, 64-448 frames rounded to four, total-pixel budget 14,680,064, and R4 token-select placeholders/timestamps. The first 8K attempt packed about 8.5 full videos into each sequence and exhausted every 80GB H100 before step 1 because LACT still processes all original chunks; 2K restores roughly two videos per pack without changing R4 semantics, source data, optimizer, LR, or trainable scope.
+- Training W&B: [`v11`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s2k-lr2e5-v11).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FWProj_train_timelens_r4_v11.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-v11/<timestamp>/hf-93`, exported with matching LACT R4 model and processor code.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s2k-lr2e5-v11/<timestamp>/hf-<final-step>`, exported with matching LACT R4 model and processor code.

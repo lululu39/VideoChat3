@@ -75,8 +75,8 @@ elif model_variant == "base-vit-projector":
 else:
     raise ValueError(f"Unsupported VIDEOCHAT3_MODEL_VARIANT={model_variant!r}")
 
-sample_max_length = 8192
-pack_max_length = 8192
+sample_max_length = int(os.getenv("VIDEOCHAT3_SAMPLE_MAX_LENGTH", "8192"))
+pack_max_length = int(os.getenv("VIDEOCHAT3_PACK_MAX_LENGTH", "8192"))
 frame_max_pixels = 224 * 224
 video_max_total_pixels = int(
     os.getenv("VIDEOCHAT3_VIDEO_MAX_TOTAL_PIXELS", 128 * frame_max_pixels)

@@ -3,7 +3,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-export WANDB_NAME="vc3-4b-lact-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-v11"
+export WANDB_NAME="vc3-4b-lact-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s2k-lr2e5-v11"
 export WANDB_RUN_ID="${WANDB_NAME}"
 export VIDEOCHAT3_MODEL_VARIANT="lact"
 export VIDEOCHAT3_MACRO_TEMPORAL_COMPRESSION_FACTOR=4
@@ -17,6 +17,8 @@ export VIDEOCHAT3_TRAIN_PROJECTOR=1
 export VIDEOCHAT3_VIT_LR=2e-5
 export VIDEOCHAT3_LACT_LR=2e-5
 export VIDEOCHAT3_LR_MIN=1e-6
+export VIDEOCHAT3_SAMPLE_MAX_LENGTH=2048
+export VIDEOCHAT3_PACK_MAX_LENGTH=2048
 unset VIDEOCHAT3_FREEZE_LACT_MEMORY_GATE
 unset VIDEOCHAT3_LACT_GATE_LR
 unset VIDEOCHAT3_LR_MIN_RATIO
