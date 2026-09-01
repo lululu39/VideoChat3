@@ -418,7 +418,7 @@ The user stopped v9 at step 87 to prioritize macro temporal compression. All tra
 
 ## v10 - Base R4 Mean Compression, ViT + Projector, TimeLens Random Half
 
-**Status:** Training completed at step 93/93; checkpoint inspection passed and core evaluation is pending.
+**Status:** Training and native-Accuracy core evaluation completed; R4 capability was not recovered.
 
 - Objective: test whether jointly adapting the complete Base vision tower and multimodal projector can recover capability after four-way macro temporal mean compression. This run contains no LACT encoder or fast-weight parameters.
 - Initialization: pinned unmodified `/mnt/localssd/VideoChat3/VideoChat3-4B`; `temporal_merge_size=4` remains unchanged and `macro_temporal_compression_factor=4` is applied after the complete vision encoder, final layer norm, and existing patch merger.
@@ -436,3 +436,16 @@ The user stopped v9 at step 87 to prioritize macro temporal compression. All tra
 Training completed all 93 steps in about 44 minutes after startup/cache construction. First/last-19 global CE means are `0.40255/0.31829`; the first/final losses are `0.64393/0.32220`. Pre-clip global norm has mean `3.201`, median `2.576`, and maximum `12.600`; all 93 steps exceed 1 and use the global clip. Stable step time averages `26.30` seconds and maximum allocated memory is `48.14 GB`.
 
 Checkpoint inspection: the 4,022,468,096 LM parameters are bitwise unchanged. Original attention, original MLP, other vision, and projector relative L2 deltas are respectively `0.4576%/0.2186%/0.0152%/0.8570%`; all intended trainable groups contain changed tensors. Native inspection is `20260901040051/checkpoint_inspection.json`. The post-save audit caught the generic processor save overwriting the custom R4 processor metadata after model export; `hf-93` was repaired without touching weights, now loads `VideoChat3MacroConfig` plus `VideoChat3MacroProcessor` with factor 4, and the engine export order is fixed for future saves.
+
+### Native Accuracy Evaluation
+
+v10 uses the same generation/scoring protocol as the fixed Base core suite. Native v10 artifacts are `/mnt/localssd/VideoChat3/eval/videochat3-base-r4-v10-core/VideoChat3-4B-Base-R4-v10/T20260901_G8f0c6cd1`. The missing untrained-R4 control was run only on Video-MME Long, as requested, with native artifacts at `/mnt/localssd/VideoChat3/eval/videochat3-base-r4-init-core/VideoChat3-4B-Base-R4-init/T20260901_Ga4d9ce25`.
+
+| Benchmark | Base R1 | Untrained Base R4 | v10 R4 | v10 - Base R1 | v10 - untrained R4 |
+|---|---:|---:|---:|---:|---:|
+| Video-MME Short | `80.70` | — | `72.60` | `-8.10` | — |
+| Video-MME Long | `60.30` | `55.10` | `52.70` | `-7.60` | `-2.40` |
+| MVBench MP4 64-frame | `70.83` | — | `61.52` | `-9.31` | — |
+| MMBench DEV EN V1.1 | `35.91` | — | `28.79` | `-7.12` | — |
+
+Conclusion: four-way mean compression alone costs `5.20` points on Video-MME Long. Training the complete ViT and projector on the random-half TimeLens grounding data does not recover that loss and instead removes another `2.40` points. v10 also regresses `7.12-9.31` points on every other native-Accuracy guardrail, including the uncompressed image benchmark, so this one-epoch large-effective-source-batch recipe should not be used as the R4 initialization for further experiments.
