@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import torch
 import torch.distributed as dist
+from PIL import Image
 
 from eval_videochat3_lact_teacher_forced_ablation import (
     answer_nll,
@@ -98,6 +99,43 @@ def correct_answer(row: pd.Series, dataset_format: str) -> str:
     except ValueError as error:
         raise ValueError(f"MVBench answer {answer!r} is absent from candidates={candidates}") from error
     return chr(ord("A") + answer_index)
+
+
+def mvbench_video_content(
+    media_path: Path,
+    *,
+    nframes: int,
+    min_pixels: int,
+    max_pixels: int,
+    total_pixels: int,
+) -> dict:
+    """Reproduce MVBench's fixed-frame sampling, including repeated short clips."""
+    import decord
+
+    reader = decord.VideoReader(str(media_path), ctx=decord.cpu(0), num_threads=1)
+    total_frames = len(reader)
+    if total_frames <= 0:
+        raise ValueError(f"Empty MVBench video: {media_path}")
+    max_frame = total_frames - 1
+    segment_size = float(max_frame) / nframes
+    indices = [
+        int((segment_size / 2) + round(segment_size * index))
+        for index in range(nframes)
+    ]
+    frames = [Image.fromarray(frame) for frame in reader.get_batch(indices).asnumpy()]
+    duration = total_frames / float(reader.get_avg_fps())
+    sample_fps = nframes / duration
+    return {
+        "type": "video",
+        "video": frames,
+        "sample_fps": sample_fps,
+        # qwen-vl-utils creates synthetic [0..nframes-1] indices for frame
+        # lists. Matching raw_fps to sample_fps preserves full-video timestamps.
+        "raw_fps": sample_fps,
+        "min_pixels": min_pixels,
+        "max_pixels": max_pixels,
+        "total_pixels": total_pixels,
+    }
 
 
 def expand_macro_video_placeholder(
@@ -418,14 +456,13 @@ def main() -> None:
             media_path = args.video_root / video
             if not media_path.is_file():
                 raise FileNotFoundError(f"Missing MVBench media: {media_path}")
-            video_item = {
-                "type": "video",
-                "video": f"file://{media_path}",
-                "nframes": args.nframes,
-                "min_pixels": args.min_pixels,
-                "max_pixels": args.max_pixels,
-                "total_pixels": args.total_pixels,
-            }
+            video_item = mvbench_video_content(
+                media_path,
+                nframes=args.nframes,
+                min_pixels=args.min_pixels,
+                max_pixels=args.max_pixels,
+                total_pixels=args.total_pixels,
+            )
         vision_messages = build_messages(
             missing_rows[0],
             video_item,
