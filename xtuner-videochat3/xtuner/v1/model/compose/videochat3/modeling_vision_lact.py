@@ -1380,6 +1380,11 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         """Run one chunk through every layer, then batch all state updates."""
         memory_inputs = []
         for layer_index, wrapped_layer in enumerate(wrapped_layers):
+            # Whole-chunk checkpoint recomputation enters below the encoder's
+            # original unshard site. Materialize each FSDP2 block explicitly
+            # so its parameters cannot remain DTensors during recompute.
+            if hasattr(wrapped_layer, "unshard"):
+                wrapped_layer.unshard()
             chunk_hidden, memory_input = wrapped_layer(
                 chunk_hidden,
                 chunk_cu_seqlens,
