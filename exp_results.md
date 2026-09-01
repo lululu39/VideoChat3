@@ -452,7 +452,7 @@ Conclusion: untrained R4 mean compression costs `7.90/5.20/8.28` points on Video
 
 ## v11 - LACT R4 Token Select, FW + Projector, TimeLens Random Half
 
-**Status:** Group-4 execution was rejected after the real 2K relaunch OOMed before step 1. The launcher uses eager layer-major group 1, exact NS5 backward, and state-only recurrent clipping; no checkpoint exists yet.
+**Status:** Active. The clean v11 restart uses eager layer-major group 1, Muon, exact/unclipped NS5 backward with local activation recomputation, and state-only recurrent clipping. It starts from the retained LACT initialization because no prior v11 checkpoint exists.
 
 - Objective: test LACT's final-output token selection at R4 while adapting only the complete FW branch and multimodal projector. Every original four-frame chunk still traverses every LACT layer with continuous per-video state; only the final vision outputs retain the last chunk in each four-chunk macro group.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; no v10 or earlier trained checkpoint reuse. Original Base tensors are unchanged, private FW projections share-init from attention, and all 27 memory gates start at zero.
