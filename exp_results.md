@@ -638,19 +638,3 @@ TimeLens-Bench completed on 9,404/9,404 queries: Charades R1@0.3/0.5/0.7/mIoU `5
 | v15 trained Base all-token | `41.39%` | `43.57%` | `55.00%` |
 
 Conclusion: one final chunk is insufficient for temporal grounding even after ViT/projector adaptation. Preserving all visual chunks and training the same Base ViT/projector substantially outperforms both untrained R4 and LACT R4 on all three TimeLens-Bench subsets.
-
-## v16 - Linear16 + Muon R4, State Clip, TimeLens Random Half
-
-**Status:** Launching from initialization. This is the v12 R4/FSDP/8K/data/trainable-scope setup with only the Linear inner update changed from Delta to Muon and state-adjoint clipping re-enabled for the NS5 recurrent path.
-
-- Objective: test whether normalized Linear+Muon writes improve LACT R4 learning quality over Linear+Delta v12 while retaining the memory and packing profile that made 8K ordinary FSDP feasible.
-- Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; original Base tensors load unchanged, the Linear16 private Q/K/V/O branch is rebuilt by attention share-init, states start at zero, and gates start at zero.
-- Data: same seed-42 12,624-row TimeLens random-half manifest over 8,985 videos as v10-v15.
-- Trainable scope: all `143,887,104` Linear-FW parameters including gates plus all `33,039,616` projector parameters (`176,926,720` total); original ViT and 4B LM frozen.
-- Memory/update: `memory_type=linear`, 16 heads, `inner_optim=muon`, exact locally recomputed NS5 backward, apply-then-update once per four-frame chunk, continuous per-video state, final update skipped, and strict layer-major group 1.
-- Optimizer and schedule: FW/projector AdamW groups both use `2e-5 -> 1e-6`, 3% warmup, cosine decay, weight decay 0, global grad clip 1.0, one epoch, and initial inner write strength `0.01`.
-- Stabilization: `clip_ns_grad_ratio=False` and `clip_state_grad_ratio=True`. This intentionally differs from v12's no-FW-clip Delta path because the repo's Muon smoke showed the unbounded NS5 recurrence reaches `inf` pre-clip norm at step 3.
-- Hardware and packing: 8xH100, ordinary FSDP, global batch 16, 8K sample/pack length, 2 FPS, 64-448 frames, R4 token selection, expected 1,485 packs / 93 optimizer steps, and cache dir `dataset_cache/cache_videochat3_4B_lact_linear16_muon_r4select_timelens_random12624_s8k_v16`.
-- Training W&B: [`v16`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-muon-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-stateclip-v16).
-- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_MUON_FWProj_train_timelens_r4_v16.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-muon-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-stateclip-v16/<timestamp>/hf-93`.
