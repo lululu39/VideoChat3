@@ -2,6 +2,7 @@
 
 ## Rules
 
+- Before every code or repository-file change, first run a non-interactive `git pull --ff-only` for the currently checked-out branch; do not edit until the pull succeeds, and do not silently switch branches.
 - Keep this memo concise: retain only stable, code-backed conclusions; merge or delete stale detail instead of appending a diary.
 - Keep concise versioned training setups, checkpoint diagnostics, and Base-vs-LACT evaluation tables in `exp_results.md`; consult it for concrete experiment results.
 - When starting a numbered experiment, first create its `exp_results.md` section with status, objective, initialization, data, trainable scope, optimizer/LR schedule, stabilization, hardware/batch/sequence settings, W&B link, and expected artifact.
