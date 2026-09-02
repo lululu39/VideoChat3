@@ -608,3 +608,14 @@ TimeLens-Bench completed on 9,404/9,404 queries: Charades R1@0.3/0.5/0.7/mIoU `1
 ## v15 - Base All Visual Tokens, ViT + Projector, TimeLens Random Half
 
 **Status:** Training completed at step 417/417. Same Base initialization, ViT/projector scope, TimeLens data, `2e-5 -> 1e-6` schedule, global clip 1.0, frozen LM, 8xH100 FSDP, global batch 16, and 8K packs as specified; compression factor 1 sends all visual tokens/timestamps to the LLM. First/final loss is `0.4566/0.2137`; first/last-20 mean is `0.3524/0.2328`; grad norm mean/median/max is `9.19/7.78/44.75`; stable step median is 7.43 s and peak allocation is 18.29 GB. LM is bitwise unchanged; ViT attention/MLP/other and projector relative L2 deltas are `0.809%/0.390%/0.0329%/1.252%`. Checkpoint: `20260902073021/hf-417`; inspection: `20260902073021/checkpoint_inspection.json`; W&B: [`v15`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-base-r1all-vitproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-v15).
+
+TimeLens-Bench completed on 9,404/9,404 queries: Charades R1@0.3/0.5/0.7/mIoU `59.53/45.79/23.25/41.39%`; ActivityNet `56.33/47.78/32.22/43.57%`; QVHighlights `68.33/57.95/44.26/55.00%`. Native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v15-timelens-bench/VideoChat3-4B-Base-all-tokens-v15/T20260902_G1e3cc57d`.
+
+| Model / visual output | Charades mIoU | ActivityNet mIoU | QVHighlights mIoU |
+|---|---:|---:|---:|
+| Untrained Base R4 mean | `31.48%` | `33.59%` | `50.42%` |
+| v12 LACT R4 select | `26.63%` | `27.98%` | `39.53%` |
+| v14 trained Base video-last | `11.80%` | `7.74%` | `3.06%` |
+| v15 trained Base all-token | `41.39%` | `43.57%` | `55.00%` |
+
+Conclusion: one final chunk is insufficient for temporal grounding even after ViT/projector adaptation. Preserving all visual chunks and training the same Base ViT/projector substantially outperforms both untrained R4 and LACT R4 on all three TimeLens-Bench subsets.
