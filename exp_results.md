@@ -452,7 +452,15 @@ Conclusion: untrained R4 mean compression costs `7.90/5.20/8.28` points on Video
 
 ### Base R4 Mean-Init TimeLens-Bench
 
-**Status:** Prepared. Evaluate `/mnt/localssd/VideoChat3/VideoChat3-4B-R4-mean-init` with the same official TimeLens-Bench revision and 2 FPS/448-frame/224px budget as v12. Config: `vlmevalkit-videochat3/configs/videochat3_base_r4_timelens_bench.json`; launcher: `scripts/eval_videochat3_base_r4_timelens_bench.sh`; artifact root: `/mnt/localssd/VideoChat3/eval/videochat3-base-r4-mean-init-timelens-bench`.
+**Status:** Completed on 9,404/9,404 queries with no missing predictions, using the same official revision and 2 FPS/448-frame/224px budget as v12.
+
+| Subset | R1@0.3 | R1@0.5 | R1@0.7 | mIoU |
+|---|---:|---:|---:|---:|
+| Charades-TimeLens | `46.57%` | `31.46%` | `13.92%` | `31.48%` |
+| ActivityNet-TimeLens | `46.20%` | `34.42%` | `21.20%` | `33.59%` |
+| QVHighlights-TimeLens | `67.10%` | `54.57%` | `38.87%` | `50.42%` |
+
+Config: `vlmevalkit-videochat3/configs/videochat3_base_r4_timelens_bench.json`; launcher: `scripts/eval_videochat3_base_r4_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-base-r4-mean-init-timelens-bench/VideoChat3-4B-Base-R4-mean-init/T20260902_G50e48fa5`.
 
 ## v11 - LACT R4 Token Select, FW + Projector, TimeLens Random Half
 
