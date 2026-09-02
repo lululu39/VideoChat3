@@ -14,6 +14,7 @@ class VideoChat3MacroProcessor(VideoChat3Processor):
         video_processor=None,
         chat_template=None,
         macro_temporal_compression_factor: int = 1,
+        macro_temporal_compression_mode: str = "auto",
         **kwargs: Any,
     ):
         if macro_temporal_compression_factor not in (1, 2, 4, 8):
@@ -21,7 +22,19 @@ class VideoChat3MacroProcessor(VideoChat3Processor):
                 "macro_temporal_compression_factor must be one of (1, 2, 4, 8), "
                 f"got {macro_temporal_compression_factor}"
             )
+        if macro_temporal_compression_mode not in (
+            "auto",
+            "mean",
+            "select_last",
+            "video_last",
+        ):
+            raise ValueError(
+                "macro_temporal_compression_mode must be one of "
+                "('auto', 'mean', 'select_last', 'video_last'), got "
+                f"{macro_temporal_compression_mode!r}"
+            )
         self.macro_temporal_compression_factor = macro_temporal_compression_factor
+        self.macro_temporal_compression_mode = macro_temporal_compression_mode
         super().__init__(
             image_processor=image_processor,
             tokenizer=tokenizer,
@@ -33,8 +46,18 @@ class VideoChat3MacroProcessor(VideoChat3Processor):
     def _calculate_timestamps(self, video_meta, temporal_merge_size: int = 4):
         timestamps = super()._calculate_timestamps(video_meta, temporal_merge_size)
         factor = self.macro_temporal_compression_factor
+        mode = self.macro_temporal_compression_mode
+        if mode == "auto":
+            mode = "mean"
+        if mode == "video_last":
+            return [timestamps[-1]]
         if factor == 1:
             return timestamps
+        if mode == "select_last":
+            return [
+                timestamps[min(start + factor, len(timestamps)) - 1]
+                for start in range(0, len(timestamps), factor)
+            ]
         return [
             sum(timestamps[start : start + factor])
             / len(timestamps[start : start + factor])

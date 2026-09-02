@@ -8,14 +8,31 @@ from .configuration_videochat3 import VideoChat3Config, VideoChat3VisionConfig
 class VideoChat3MacroVisionConfig(VideoChat3VisionConfig):
     model_type = "videochat3_macro_vision"
 
-    def __init__(self, macro_temporal_compression_factor: int = 1, **kwargs: Any):
+    def __init__(
+        self,
+        macro_temporal_compression_factor: int = 1,
+        macro_temporal_compression_mode: str = "auto",
+        **kwargs: Any,
+    ):
         super().__init__(**kwargs)
         if macro_temporal_compression_factor not in (1, 2, 4, 8):
             raise ValueError(
                 "macro_temporal_compression_factor must be one of (1, 2, 4, 8), "
                 f"got {macro_temporal_compression_factor}"
             )
+        if macro_temporal_compression_mode not in (
+            "auto",
+            "mean",
+            "select_last",
+            "video_last",
+        ):
+            raise ValueError(
+                "macro_temporal_compression_mode must be one of "
+                "('auto', 'mean', 'select_last', 'video_last'), got "
+                f"{macro_temporal_compression_mode!r}"
+            )
         self.macro_temporal_compression_factor = macro_temporal_compression_factor
+        self.macro_temporal_compression_mode = macro_temporal_compression_mode
 
 
 class VideoChat3MacroConfig(VideoChat3Config):

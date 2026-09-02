@@ -265,7 +265,7 @@ trainer = TrainerConfig(
                 else [
                     "videochat3-4b",
                     "base",
-                    "macro-temporal-mean",
+                    f"macro-{model_cfg.vision_config.macro_temporal_compression_mode}",
                     f"macro-r{macro_temporal_compression_factor}",
                     "vit-projector",
                     dataset_tag,

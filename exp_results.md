@@ -590,3 +590,11 @@ This does not contradict VideoMamba's cross-layer result. Its controlled F64 ben
 | QVHighlights-TimeLens | `53.54%` | `40.69%` | `27.45%` | `39.53%` |
 
 Config: `vlmevalkit-videochat3/configs/videochat3_v12_timelens_bench.json`; launcher: `scripts/eval_videochat3_v12_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v12-timelens-bench/VideoChat3-4B-LACT-v12/T20260902_G7f15eebf`.
+
+## v14 - Base Final-Chunk Select, ViT + Projector, TimeLens Random Half
+
+**Status:** Prepared. Initialize from `/mnt/localssd/VideoChat3/VideoChat3-4B`; train all `416,870,640` ViT plus `33,039,616` projector parameters with the v10 `2e-5 -> 1e-6` one-epoch schedule, global clip 1.0, and frozen 4B LM. `video_last` keeps one final four-frame chunk output per video after the full Base vision scan. Use 8xH100 ordinary FSDP, global batch 16, 1K packs, and the v10/v12 TimeLens random-half data. W&B: [`v14`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-base-video-last-vitproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s1k-lr2e5-v14); launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_BASE_LASTCHUNK_ViTProj_train_timelens_v14.sh`; expected artifact: `.../<timestamp>/hf-114`.
+
+## v15 - Base All Visual Tokens, ViT + Projector, TimeLens Random Half
+
+**Status:** Prepared. Same Base initialization, trainable ViT/projector scope, data, optimizer, LR, schedule, global clip, global batch, and FSDP as v14; set compression factor 1 so every original four-frame chunk output and timestamp reaches the LLM. Use 8K packs. W&B: [`v15`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-base-r1all-vitproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-v15); launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_BASE_ALLTOKENS_ViTProj_train_timelens_v15.sh`; expected artifact: `.../<timestamp>/hf-417`.

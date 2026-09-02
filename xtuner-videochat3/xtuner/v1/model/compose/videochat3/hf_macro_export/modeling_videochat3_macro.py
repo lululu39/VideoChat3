@@ -20,6 +20,7 @@ def _compress_chunk_outputs(
     chunk_outputs: list[torch.Tensor],
     video_clip_counts: list[int],
     factor: int,
+    mode: str,
 ) -> list[torch.Tensor]:
     if factor not in (1, 2, 4, 8):
         raise ValueError(f"Unsupported macro temporal compression factor: {factor}")
@@ -28,15 +29,30 @@ def _compress_chunk_outputs(
             f"video_clip_counts={video_clip_counts} do not cover "
             f"{len(chunk_outputs)} outputs"
         )
-    if factor == 1:
+    if mode == "auto":
+        mode = "mean"
+    if mode not in ("mean", "select_last", "video_last"):
+        raise ValueError(f"Unsupported macro temporal compression mode: {mode}")
+    if factor == 1 and mode != "video_last":
         return chunk_outputs
     compressed = []
     offset = 0
     for clip_count in video_clip_counts:
         video_outputs = chunk_outputs[offset : offset + clip_count]
+        if mode == "video_last":
+            compressed.append(video_outputs[-1])
+            offset += clip_count
+            continue
         for start in range(0, clip_count, factor):
             group = video_outputs[start : min(start + factor, clip_count)]
-            compressed.append(group[0] if len(group) == 1 else torch.stack(group).mean(dim=0))
+            if mode == "select_last":
+                compressed.append(group[-1])
+            else:
+                compressed.append(
+                    group[0]
+                    if len(group) == 1
+                    else torch.stack(group).mean(dim=0)
+                )
         offset += clip_count
     return compressed
 
@@ -55,6 +71,7 @@ class VideoChat3MacroVisionModel(VideoChat3VisionModel):
             chunk_outputs,
             video_clip_counts,
             self.config.macro_temporal_compression_factor,
+            getattr(self.config, "macro_temporal_compression_mode", "auto"),
         )
 
 

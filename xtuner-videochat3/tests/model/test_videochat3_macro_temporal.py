@@ -1,4 +1,6 @@
 import torch
+import json
+from types import SimpleNamespace
 
 
 def _identity_compile(fn=None, *args, **kwargs):
@@ -15,6 +17,9 @@ from xtuner.v1.model.compose.videochat3.macro_temporal import (  # noqa: E402
     macro_clip_count,
     macro_video_token_count,
     resolve_macro_temporal_compression_mode,
+)
+from xtuner.v1.model.compose.videochat3.hf_macro_export import (  # noqa: E402
+    export_macro_hf_artifacts,
 )
 
 
@@ -53,3 +58,23 @@ def test_existing_auto_modes_preserve_base_and_lact_defaults():
     assert resolve_macro_temporal_compression_mode("auto", default="select_last") == "select_last"
     assert compress_timestamps(timestamps, 4) == [2.0, 4.5]
     assert compress_timestamps(timestamps, 4, mode="select_last") == [3.5, 4.5]
+
+
+def test_base_macro_export_records_video_last_mode(tmp_path):
+    (tmp_path / "config.json").write_text(
+        json.dumps({"vision_config": {}}), encoding="utf-8"
+    )
+    (tmp_path / "processor_config.json").write_text("{}", encoding="utf-8")
+    model_config = SimpleNamespace(
+        vision_config=SimpleNamespace(
+            macro_temporal_compression_factor=4,
+            macro_temporal_compression_mode="video_last",
+        )
+    )
+
+    export_macro_hf_artifacts(tmp_path, model_config)
+
+    saved_config = json.loads((tmp_path / "config.json").read_text())
+    saved_processor = json.loads((tmp_path / "processor_config.json").read_text())
+    assert saved_config["vision_config"]["macro_temporal_compression_mode"] == "video_last"
+    assert saved_processor["macro_temporal_compression_mode"] == "video_last"
