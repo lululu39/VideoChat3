@@ -1,3 +1,5 @@
+import copy
+
 import torch
 import torch.nn.functional as F
 from torch.utils.checkpoint import checkpoint
@@ -41,6 +43,30 @@ def _copy_baseline_weights(baseline, lact):
     assert missing
     for block in lact.encoder.blocks:
         block.reset_lact_parameters()
+
+
+def _legacy_linear_memory_scan(
+    block,
+    hidden_states,
+    clip_slices,
+    video_clip_counts,
+):
+    outputs = []
+    clip_index = 0
+    for clip_count in video_clip_counts:
+        state = block.init_linear_state(batch_size=1)
+        for video_clip_index in range(clip_count):
+            start, end = clip_slices[clip_index]
+            clip_hidden = hidden_states[start:end].unsqueeze(0)
+            clip_hidden, memory_input, _, _ = block.apply_memory(
+                clip_hidden,
+                state,
+            )
+            if video_clip_index + 1 < clip_count:
+                state = block.update_linear_state(memory_input, state)
+            outputs.append(clip_hidden.squeeze(0))
+            clip_index += 1
+    return torch.cat(outputs, dim=0)
 
 
 def _ns5_vjp(matrix, cotangent, *, clip_ns_grad_ratio):
@@ -382,6 +408,59 @@ def test_fast_state_updates_later_clip_and_resets_at_video_boundary():
     assert len(batched) == len(separate)
     for batched_clip, separate_clip in zip(batched, separate):
         torch.testing.assert_close(batched_clip, separate_clip, rtol=1e-5, atol=1e-6)
+
+
+def test_packed_linear_projections_match_per_chunk_forward_and_gradients():
+    torch.manual_seed(17)
+    lact = VideoChat3LACTVisionConfig(
+        **_vision_kwargs(),
+        memory_type="linear",
+        inner_optim="delta",
+        fw_num_heads=4,
+        clip_state_grad_ratio=False,
+    ).build()
+    lact.init_weights()
+    packed_block = lact.encoder.blocks[0]
+    with torch.no_grad():
+        packed_block.memory_gate.fill_(0.1)
+    legacy_block = copy.deepcopy(packed_block)
+
+    clip_slices = [(0, 16), (16, 24), (24, 40), (40, 56), (56, 64)]
+    video_clip_counts = [2, 3]
+    packed_input = torch.randn(64, 16, requires_grad=True)
+    legacy_input = packed_input.detach().clone().requires_grad_(True)
+
+    packed_output = packed_block._forward_linear_memory_scan(
+        packed_input,
+        clip_slices,
+        video_clip_counts,
+    )
+    legacy_output = _legacy_linear_memory_scan(
+        legacy_block,
+        legacy_input,
+        clip_slices,
+        video_clip_counts,
+    )
+    torch.testing.assert_close(packed_output, legacy_output, rtol=1e-5, atol=1e-6)
+
+    packed_output.square().mean().backward()
+    legacy_output.square().mean().backward()
+    torch.testing.assert_close(packed_input.grad, legacy_input.grad, rtol=1e-5, atol=1e-6)
+    for (packed_name, packed_parameter), (legacy_name, legacy_parameter) in zip(
+        packed_block.named_parameters(),
+        legacy_block.named_parameters(),
+        strict=True,
+    ):
+        assert packed_name == legacy_name
+        if packed_parameter.grad is None or legacy_parameter.grad is None:
+            assert packed_parameter.grad is None and legacy_parameter.grad is None
+            continue
+        torch.testing.assert_close(
+            packed_parameter.grad,
+            legacy_parameter.grad,
+            rtol=1e-5,
+            atol=1e-6,
+        )
 
 
 def test_lact_config_builds_separate_vision_model():

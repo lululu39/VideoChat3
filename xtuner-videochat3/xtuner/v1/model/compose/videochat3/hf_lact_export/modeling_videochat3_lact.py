@@ -629,21 +629,32 @@ class FastWeightLinear(nn.Module):
     def project_key(self, x: torch.Tensor) -> torch.Tensor:
         return self._project_heads(x, self.update_proj)
 
-    def forward(self, x: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
-        query = self._project_heads(x, self.apply_proj)
+    def project_query(self, x: torch.Tensor) -> torch.Tensor:
+        return self._project_heads(x, self.apply_proj)
+
+    def apply_projected(
+        self,
+        query: torch.Tensor,
+        state: torch.Tensor,
+    ) -> torch.Tensor:
         output = torch.einsum("blhd,bhde->blhe", query, state)
-        output = output.reshape(x.shape[0], x.shape[1], self.dim)
+        return output.reshape(query.shape[0], query.shape[1], self.dim)
+
+    def project_output(self, output: torch.Tensor) -> torch.Tensor:
         return self.output_proj(self.output_norm(output))
 
-    def update(
+    def forward(self, x: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
+        query = self.project_query(x)
+        return self.project_output(self.apply_projected(query, state))
+
+    def update_projected(
         self,
-        key: torch.Tensor,
+        key_heads: torch.Tensor,
         target: torch.Tensor,
         learning_rates: torch.Tensor,
         state: torch.Tensor,
         muon_update_steps: int,
     ) -> torch.Tensor:
-        key_heads = self.project_key(key).to(state.dtype)
         target_heads = target.reshape(
             target.shape[0],
             target.shape[1],
@@ -657,7 +668,7 @@ class FastWeightLinear(nn.Module):
             "blhd,blhe->bhde",
             key_heads,
             weighted_error,
-        ) / key.shape[1]
+        ) / key_heads.shape[1]
         if self.inner_optim == "muon":
             state_update = zeropower_via_newtonschulz5(
                 state_gradient.flatten(0, 1),
@@ -668,6 +679,23 @@ class FastWeightLinear(nn.Module):
         else:
             state_update = state_gradient
         return state + state_update.to(state.dtype)
+
+    def update(
+        self,
+        key: torch.Tensor,
+        target: torch.Tensor,
+        learning_rates: torch.Tensor,
+        state: torch.Tensor,
+        muon_update_steps: int,
+    ) -> torch.Tensor:
+        key_heads = self.project_key(key).to(state.dtype)
+        return self.update_projected(
+            key_heads,
+            target,
+            learning_rates,
+            state,
+            muon_update_steps,
+        )
 
 
 class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
@@ -880,15 +908,45 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         clip_slices: list[tuple[int, int]],
         video_clip_counts: list[int],
     ) -> torch.Tensor:
-        outputs = []
+        if sum(video_clip_counts) != len(clip_slices):
+            raise ValueError(
+                f"video_clip_counts={video_clip_counts} do not cover "
+                f"{len(clip_slices)} clips"
+            )
         clip_index = 0
         reset_state = self.lact_inference_state_mode == "reset_state"
         if reset_state and self.training:
             raise RuntimeError("reset_state is an inference-only LACT state mode")
+        if reset_state:
+            return hidden_states
+
+        packed_memory_input = self.memory_norm(hidden_states.unsqueeze(0))
+        packed_query = self.memory.project_query(packed_memory_input)
+        packed_key = self.memory.project_key(packed_memory_input)
+        prediction_input = F.rms_norm(
+            packed_memory_input,
+            normalized_shape=(packed_memory_input.shape[-1],),
+            eps=1e-5,
+        )
+        packed_target = self.value_proj(prediction_input)
+        with torch.autocast(device_type=hidden_states.device.type, enabled=False):
+            packed_learning_rates = torch.sigmoid(
+                F.linear(
+                    prediction_input.float(),
+                    self.beta_proj.weight.float(),
+                )
+                + self.base_lr_inverse
+            )
+
+        outputs = []
         for clip_count in video_clip_counts:
+            if clip_count <= 0:
+                raise ValueError(f"clip_count must be positive, got {clip_count}")
+            video_start = clip_slices[clip_index][0]
+            video_memory_outputs = []
             state = self.init_linear_state(batch_size=1)
             for video_clip_index in range(clip_count):
-                will_update = not reset_state and video_clip_index + 1 < clip_count
+                will_update = video_clip_index + 1 < clip_count
                 state_ratio_context = None
                 if will_update and self.clip_state_grad_ratio:
                     state_ratio_context = _StateGradRatioContext()
@@ -899,23 +957,32 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                 else:
                     group_state = state
                 start, end = clip_slices[clip_index]
-                clip_hidden = hidden_states[start:end].unsqueeze(0)
-                clip_hidden, memory_input, _, _ = self.apply_memory(
-                    clip_hidden,
+                memory_output = self.memory.apply_projected(
+                    packed_query[:, start:end],
                     group_state,
                 )
                 if will_update:
-                    state = self.update_linear_state(memory_input, group_state)
+                    state = self.memory.update_projected(
+                        packed_key[:, start:end].to(group_state.dtype),
+                        packed_target[:, start:end],
+                        packed_learning_rates[:, start:end],
+                        group_state,
+                        self.muon_update_steps,
+                    )
                     if state_ratio_context is not None:
                         state = _CaptureNextLinearStateGradient.apply(
                             state,
                             state_ratio_context,
                         )
-                outputs.append(clip_hidden.squeeze(0))
+                video_memory_outputs.append(memory_output)
                 clip_index += 1
-        if clip_index != len(clip_slices):
-            raise ValueError(
-                f"Consumed {clip_index} clips, but layout contains {len(clip_slices)}"
+            video_end = clip_slices[clip_index - 1][1]
+            memory_output = self.memory.project_output(
+                torch.cat(video_memory_outputs, dim=1)
+            ).squeeze(0)
+            outputs.append(
+                hidden_states[video_start:video_end]
+                + memory_output * self.memory_gate
             )
         return torch.cat(outputs, dim=0)
 
