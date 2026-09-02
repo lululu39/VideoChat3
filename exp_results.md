@@ -543,7 +543,7 @@ Startup validation: all ranks loaded the intended `143.0M` Linear-FW plus `33.0M
 
 ## v13 - Linear16 + Delta Last-Chunk Token Select, TimeLens Random Half
 
-**Status:** Running from initialization at step 1/114 after the strict 8K version failed before step 1.
+**Status:** Training completed at step 114/114 and TimeLens-Bench evaluation completed on all 9,404 queries. The strict 8K attempt failed before step 1 and remains diagnostic-only.
 
 - Objective: isolate whether the train signal can still improve when the full LACT recurrent vision scan processes every four-frame chunk, but the LLM receives only the final chunk's post-merger visual tokens and final timestamp placeholder for each video.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; same Base-exact Linear16 share-init path as v12.
@@ -560,6 +560,24 @@ Startup validation: all ranks loaded the intended `143.0M` Linear-FW plus `33.0M
 Strict 8K attempt: run [`v13-8K-failed`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-delta-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-nofwclip-v13) built 223 packs from 12,624 rows, roughly 57 videos per pack and about 900 videos per global optimizer step. It OOMed in the first forward at `apply_rope` before any optimizer step: rank 3 had `72.45 GiB` PyTorch allocation / `74.60 GiB` process use and requested another `12.16 GiB`. This proves v12's 8K pack length cannot be held fixed when the cache length ignores all non-final chunk tokens, because the vision tower still processes every original chunk.
 
 Startup validation: the 1K relaunch builds 1,815 packs / 114 optimizer steps, close to v12's per-pack video count, while keeping the same model, data, optimizer, and last-chunk compression semantics. Step 1 has global CE `0.800191`, finite pre-clip global norm `1.3236`, and the expected zero first warmup LR. The largest rank reports `69.36 GB` allocated / `72.09 GB` reserved, with no OOM, NaN, invalid norm, or skipped step. Rank times are `162.56-218.28s`, including `49.67-105.40s` data wait, for an initial ETA of roughly 5-7 hours. Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s1k-lr2e5-nofwclip-v13/20260902025612`; native log: `torchrun_logs/training_20260902_025555_datava270000001.log`.
+
+Training completion: v13 finished one epoch at step 114/114 and saved the final HF checkpoint at `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s1k-lr2e5-nofwclip-v13/20260902025612/hf-114`. First/final global CE is `0.8002/0.3917`; first/last-20 mean is `0.5891/0.3898`; pre-clip grad norm mean/median/max is `0.471/0.209/3.744` with the maximum at step 12. No NaN, invalid norm, skipped optimizer step, traceback, or OOM appears in the training log. Rank-0 stable step median excluding step 1 is `163.92s`; peak allocated/reserved memory is `75.57/76.66 GB`.
+
+Checkpoint inspection against a seed-42 Linear16+Delta `video_last` reconstruction from `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init` is saved at `20260902025612/checkpoint_inspection.json`. Gate RMS is `2.65e-4` with max absolute value `8.89e-4`; FW beta/private/value relative L2 deltas are `141.43%/0.465%/0.622%`; FW memory norms remain bitwise unchanged. Projector relative L2 delta is `1.534%`. Original attention, original MLP, other original vision parameters, and the 4B language model are bitwise unchanged; no reference tensors were missing or extra.
+
+### TimeLens-Bench Native Evaluation
+
+**Status:** Completed on all 9,404 queries with no missing predictions. Official `TencentARC/TimeLens-Bench` revision `5fc78c4b401b2dadf7a3a4355d51d566ff28e0c9`; training-aligned 2 FPS, 448-frame, 224px/14,680,064-total-pixel budget.
+
+| Subset | R1@0.3 | R1@0.5 | R1@0.7 | mIoU |
+|---|---:|---:|---:|---:|
+| Charades-TimeLens | `15.02%` | `8.86%` | `3.21%` | `10.41%` |
+| ActivityNet-TimeLens | `8.93%` | `4.78%` | `2.00%` | `7.19%` |
+| QVHighlights-TimeLens | `2.60%` | `1.36%` | `0.91%` | `3.82%` |
+
+Config: `vlmevalkit-videochat3/configs/videochat3_v13_timelens_bench.json`; launcher: `scripts/eval_videochat3_v13_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v13-timelens-bench/VideoChat3-4B-LACT-v13/T20260902_Gd45ae171`.
+
+Conclusion: taking only the final LACT chunk tokens collapses native temporal grounding. v13 is far below v12 R4 select on all three subsets, and roughly matches the bad v14 Base `video_last` regime rather than preserving TimeLens information through the recurrent scan alone.
 
 ### Retired 2K Precursor
 
@@ -615,7 +633,24 @@ TimeLens-Bench completed on 9,404/9,404 queries: Charades R1@0.3/0.5/0.7/mIoU `5
 |---|---:|---:|---:|
 | Untrained Base R4 mean | `31.48%` | `33.59%` | `50.42%` |
 | v12 LACT R4 select | `26.63%` | `27.98%` | `39.53%` |
+| v13 LACT video-last | `10.41%` | `7.19%` | `3.82%` |
 | v14 trained Base video-last | `11.80%` | `7.74%` | `3.06%` |
 | v15 trained Base all-token | `41.39%` | `43.57%` | `55.00%` |
 
 Conclusion: one final chunk is insufficient for temporal grounding even after ViT/projector adaptation. Preserving all visual chunks and training the same Base ViT/projector substantially outperforms both untrained R4 and LACT R4 on all three TimeLens-Bench subsets.
+
+## v16 - Linear16 + Muon R4, State Clip, TimeLens Random Half
+
+**Status:** Launching from initialization. This is the v12 R4/FSDP/8K/data/trainable-scope setup with only the Linear inner update changed from Delta to Muon and state-adjoint clipping re-enabled for the NS5 recurrent path.
+
+- Objective: test whether normalized Linear+Muon writes improve LACT R4 learning quality over Linear+Delta v12 while retaining the memory and packing profile that made 8K ordinary FSDP feasible.
+- Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; original Base tensors load unchanged, the Linear16 private Q/K/V/O branch is rebuilt by attention share-init, states start at zero, and gates start at zero.
+- Data: same seed-42 12,624-row TimeLens random-half manifest over 8,985 videos as v10-v15.
+- Trainable scope: all `143,887,104` Linear-FW parameters including gates plus all `33,039,616` projector parameters (`176,926,720` total); original ViT and 4B LM frozen.
+- Memory/update: `memory_type=linear`, 16 heads, `inner_optim=muon`, exact locally recomputed NS5 backward, apply-then-update once per four-frame chunk, continuous per-video state, final update skipped, and strict layer-major group 1.
+- Optimizer and schedule: FW/projector AdamW groups both use `2e-5 -> 1e-6`, 3% warmup, cosine decay, weight decay 0, global grad clip 1.0, one epoch, and initial inner write strength `0.01`.
+- Stabilization: `clip_ns_grad_ratio=False` and `clip_state_grad_ratio=True`. This intentionally differs from v12's no-FW-clip Delta path because the repo's Muon smoke showed the unbounded NS5 recurrence reaches `inf` pre-clip norm at step 3.
+- Hardware and packing: 8xH100, ordinary FSDP, global batch 16, 8K sample/pack length, 2 FPS, 64-448 frames, R4 token selection, expected 1,485 packs / 93 optimizer steps, and cache dir `dataset_cache/cache_videochat3_4B_lact_linear16_muon_r4select_timelens_random12624_s8k_v16`.
+- Training W&B: [`v16`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-muon-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-stateclip-v16).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_MUON_FWProj_train_timelens_r4_v16.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-muon-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-stateclip-v16/<timestamp>/hf-93`.
