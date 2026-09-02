@@ -57,6 +57,15 @@ The official snapshot is prepared at `/mnt/localssd/dataset/VideoChat3/TimeLens-
 - A real 498.9-second sample successfully decoded 448 frames and produced matching cache/runtime lengths of 4,766 tokens with 18 supervised answer tokens.
 - Use `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FW_train_timelens.sh` after creating the next numbered experiment record and setting `WANDB_NAME`.
 
+## Prepared TimeLens-Bench
+
+The held-out official benchmark is prepared at `/mnt/localssd/dataset/VideoChat3/TimeLens-Bench`, pinned to `TencentARC/TimeLens-Bench` revision `5fc78c4b401b2dadf7a3a4355d51d566ff28e0c9`.
+
+- Run `uv run --frozen python scripts/prepare_timelens_bench.py --delete-archives --extract-workers 3` to download, extract, validate, and remove compressed shards. The validated release is about 70 GB: 4,279 MP4s and 9,404 queries across Charades, ActivityNet, and QVHighlights.
+- VideoChat3 evaluation uses 2 FPS, at most 448 frames, 224px per frame, and a 14,680,064 total-pixel budget. Frame caches live under `/mnt/localssd/dataset/VLMEvalKit/LMUData` and are reusable.
+- Configure a checkpoint in `vlmevalkit-videochat3/configs/videochat3_v12_timelens_bench.json`, then run `bash scripts/eval_videochat3_v12_timelens_bench.sh`; the launcher is eight-GPU and resumable.
+- Report the official native metrics separately for each subset: R1@0.3, R1@0.5, R1@0.7, and mIoU. Versioned results and native artifact paths belong in `exp_results.md`.
+
 ## Retired VideoChat-Flash LongVid Subset
 
 The rejected candidate was pinned to revision `be87f5516a709be079cec8b727dd2287bf2dd70f`; its 382 GB local data directory was deleted on 2026-09-02. Historical code and experiment artifacts remain.
