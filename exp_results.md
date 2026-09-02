@@ -577,4 +577,12 @@ This does not contradict VideoMamba's cross-layer result. Its controlled F64 ben
 
 ### TimeLens-Bench Native Evaluation
 
-**Status:** Prepared. Evaluate v12 on the official pinned `TencentARC/TimeLens-Bench` revision `5fc78c4b401b2dadf7a3a4355d51d566ff28e0c9`: Charades/ActivityNet/QVHighlights, 4,279 videos and 9,404 queries. Use the training-aligned 2 FPS, 448-frame, 224px/14,680,064-total-pixel budget and report native R1@0.3/0.5/0.7 plus mIoU. Config: `vlmevalkit-videochat3/configs/videochat3_v12_timelens_bench.json`; launcher: `scripts/eval_videochat3_v12_timelens_bench.sh`; artifact root: `/mnt/localssd/VideoChat3/eval/videochat3-v12-timelens-bench`.
+**Status:** Completed on all 9,404 queries with no missing predictions. Official `TencentARC/TimeLens-Bench` revision `5fc78c4b401b2dadf7a3a4355d51d566ff28e0c9`; training-aligned 2 FPS, 448-frame, 224px/14,680,064-total-pixel budget.
+
+| Subset | R1@0.3 | R1@0.5 | R1@0.7 | mIoU |
+|---|---:|---:|---:|---:|
+| Charades-TimeLens | `40.80%` | `27.24%` | `11.39%` | `26.63%` |
+| ActivityNet-TimeLens | `38.24%` | `27.87%` | `17.04%` | `27.98%` |
+| QVHighlights-TimeLens | `53.54%` | `40.69%` | `27.45%` | `39.53%` |
+
+Config: `vlmevalkit-videochat3/configs/videochat3_v12_timelens_bench.json`; launcher: `scripts/eval_videochat3_v12_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v12-timelens-bench/VideoChat3-4B-LACT-v12/T20260902_G7f15eebf`.

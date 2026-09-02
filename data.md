@@ -25,7 +25,7 @@ Sources: [VideoChat3 paper](https://arxiv.org/abs/2607.14935), [Academic2M](http
 | Dataset | Scale and role | Adoption | Assessment for LACT |
 | --- | --- | --- | --- |
 | [TimeLens-100K](https://huggingface.co/datasets/TencentARC/TimeLens-100K) | 146.5 GB download; 19,466 videos and 96,586 temporal-grounding events. Videos average 106 seconds and reach 499 seconds. | CVPR 2026; used to train the released TimeLens-7B/8B models. | Selected replacement source. It directly supervises visual event localization with timestamp answers and ships complete MP4 media. Use the visual-only filtered manifests prepared below. |
-| [VideoChat-Flash LongVid subset](https://huggingface.co/datasets/OpenGVLab/VideoChat-Flash-Training-Data/tree/main/longvid_subset) | 5,870 QA rows over extracted JPG sequences. | Released with VideoChat-Flash and InternVideo2.5. | Rejected after audit: 22.3% answer-in-question shortcuts, 963/963 canonical `after X` rows copy `X` as the answer, and one third of the set is numeric event counting. Retained locally only for audit. |
+| [VideoChat-Flash LongVid subset](https://huggingface.co/datasets/OpenGVLab/VideoChat-Flash-Training-Data/tree/main/longvid_subset) | 5,870 QA rows over extracted JPG sequences. | Released with VideoChat-Flash and InternVideo2.5. | Rejected after audit and deleted locally on 2026-09-02: 22.3% answer-in-question shortcuts, 963/963 canonical `after X` rows copy `X`, and one third is numeric event counting. |
 | [NExT-QA](https://github.com/doc-doc/NExT-QA) | 5,440 videos and about 52K human causal/temporal QA pairs, averaging 44 seconds. | CVPR 2021 and widely reused as a VideoQA benchmark. | Preserve as a benchmark/control rather than the next main training source. The stopped v8 run is diagnostic-only and has no usable HF checkpoint. |
 | [Vript](https://huggingface.co/datasets/Mutonix/Vript) | Long-video media is about 716 GB; videos average about 6 minutes, reach 3 hours, and total about 1.3K hours. Rich scene-level and full-video captions. | Used by VideoChat3, VideoChat-Flash, and SmolVLM2; NeurIPS 2024 Datasets and Benchmarks. | Strong visual-only long-video source. Primarily captioning rather than QA, so use a selected shard set or derive cross-event QA. |
 | [FineVideo](https://huggingface.co/datasets/HuggingFaceFV/finevideo) | About 600 GB; 43,751 videos, 3,425 hours, average 4.7 minutes, with scene splits, narrative descriptions, and QA. | Used in the SmolVLM2 and InternVL2.5 data mixtures. | Good mid/long narrative base and permissive CC-BY source videos. Some labels use speech transcripts, so filter audio/speech-dependent supervision. |
@@ -59,7 +59,7 @@ The official snapshot is prepared at `/mnt/localssd/dataset/VideoChat3/TimeLens-
 
 ## Retired VideoChat-Flash LongVid Subset
 
-The rejected candidate remains locally available at `/mnt/localssd/dataset/VideoChat3/VideoChat-Flash-Training-Data`, pinned to source revision `be87f5516a709be079cec8b727dd2287bf2dd70f`.
+The rejected candidate was pinned to revision `be87f5516a709be079cec8b727dd2287bf2dd70f`; its 382 GB local data directory was deleted on 2026-09-02. Historical code and experiment artifacts remain.
 
 - Four released QA files contain 5,870 rows over 5,478 per-dataset unique videos; every media reference resolves to a non-empty frame directory.
 - The released media is an extracted JPG sequence. The official VideoChat-Flash Stage 3 recipe reads it as `img`, treats non-TVQA frame directories as 1 FPS, samples 64-512 frames, and rounds the sampled length down to a multiple of four.
