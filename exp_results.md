@@ -531,7 +531,7 @@ Startup validation: all ranks loaded the intended `143.0M` Linear-FW plus `33.0M
 
 ## v13 - Linear16 + Delta Last-Chunk Token Select, TimeLens Random Half
 
-**Status:** Prepared for launch from the same local initialization/data as v12.
+**Status:** Relaunching with 1K packing after the strict 8K version failed before step 1.
 
 - Objective: isolate whether the train signal can still improve when the full LACT recurrent vision scan processes every four-frame chunk, but the LLM receives only the final chunk's post-merger visual tokens and final timestamp placeholder for each video.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; same Base-exact Linear16 share-init path as v12.
@@ -540,10 +540,12 @@ Startup validation: all ranks loaded the intended `143.0M` Linear-FW plus `33.0M
 - Memory/update: same as v12, `memory_type=linear`, 16 heads, `inner_optim=delta`, group 1, continuous per-video state, final update skipped.
 - Visual compression: keeps `VIDEOCHAT3_MACRO_TEMPORAL_COMPRESSION_FACTOR=4` but sets `VIDEOCHAT3_MACRO_TEMPORAL_COMPRESSION_MODE=video_last`, so each video contributes one final chunk's spatial token grid to the LLM instead of v12's one token grid per four chunks.
 - Optimizer/schedule/stabilization: same as v12, FW/projector AdamW `2e-5 -> 1e-6`, 3% warmup, cosine decay, no FW ratio clip, and global grad clip 1.0.
-- Hardware and packing: 8xH100 ordinary FSDP, global batch 16, 8K sample/pack length, TimeLens 2 FPS, 64-448 frames, total-pixel budget 14,680,064, and cache dir `dataset_cache/cache_videochat3_4B_lact_linear16_delta_lastchunk_timelens_random12624_s8k_v13`.
-- Training W&B: [`v13`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-delta-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-nofwclip-v13).
+- Hardware and packing: 8xH100 ordinary FSDP, global batch 16, 1K sample/pack length, TimeLens 2 FPS, 64-448 frames, total-pixel budget 14,680,064, and cache dir `dataset_cache/cache_videochat3_4B_lact_linear16_delta_lastchunk_timelens_random12624_s1k_v13`. The pack length differs from v12 only because strict 8K last-chunk packing produced far more videos per optimizer step than v12.
+- Training W&B: [`v13`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-delta-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s1k-lr2e5-nofwclip-v13).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_LASTCHUNK_FWProj_train_timelens_r4_v13.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-nofwclip-v13/<timestamp>/hf-<final-step>`, with the final step determined by the rebuilt last-chunk cache.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s1k-lr2e5-nofwclip-v13/<timestamp>/hf-<final-step>`, with the final step determined by the rebuilt last-chunk cache.
+
+Strict 8K attempt: run [`v13-8K-failed`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-delta-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-nofwclip-v13) built 223 packs from 12,624 rows, roughly 57 videos per pack and about 900 videos per global optimizer step. It OOMed in the first forward at `apply_rope` before any optimizer step: rank 3 had `72.45 GiB` PyTorch allocation / `74.60 GiB` process use and requested another `12.16 GiB`. This proves v12's 8K pack length cannot be held fixed when the cache length ignores all non-final chunk tokens, because the vision tower still processes every original chunk.
 
 ### Retired 2K Precursor
 
