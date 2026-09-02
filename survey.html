@@ -1,0 +1,811 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Video VLM Token Compression Survey — LACT 最后 Chunk 压缩的能力边界</title>
+  <style>
+    :root {
+      --ink: #17212b;
+      --muted: #5d6974;
+      --paper: #f5f2eb;
+      --card: #fffdf8;
+      --line: #d7d1c5;
+      --navy: #102a43;
+      --blue: #2267a5;
+      --teal: #177e75;
+      --green: #2f7d4a;
+      --green-bg: #e8f4e9;
+      --amber: #946200;
+      --amber-bg: #fff3cf;
+      --red: #a23a35;
+      --red-bg: #fbe4e2;
+      --purple: #6d4ab0;
+      --shadow: 0 10px 30px rgba(19, 34, 49, .08);
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 10% 0%, rgba(34, 103, 165, .09), transparent 28rem),
+        radial-gradient(circle at 90% 12%, rgba(23, 126, 117, .08), transparent 25rem),
+        var(--paper);
+      font: 16px/1.68 -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans SC",
+        "PingFang SC", "Microsoft YaHei", sans-serif;
+    }
+
+    a { color: var(--blue); text-decoration-thickness: 1px; text-underline-offset: 3px; }
+    a:hover { color: #124a79; }
+    code {
+      padding: .08rem .32rem;
+      border: 1px solid #ddd6ca;
+      border-radius: 5px;
+      background: #f4efe6;
+      font-size: .92em;
+    }
+
+    .hero {
+      color: white;
+      background:
+        linear-gradient(120deg, rgba(16, 42, 67, .98), rgba(25, 74, 108, .96) 55%, rgba(23, 126, 117, .92));
+      border-bottom: 5px solid #e4ad46;
+    }
+    .hero-inner, main, .footer-inner { width: min(1180px, calc(100% - 34px)); margin: auto; }
+    .hero-inner { padding: 58px 0 48px; }
+    .eyebrow {
+      margin: 0 0 12px;
+      color: #bde8df;
+      font-size: .78rem;
+      font-weight: 800;
+      letter-spacing: .14em;
+      text-transform: uppercase;
+    }
+    h1 { margin: 0; max-width: 980px; font-size: clamp(2rem, 5vw, 4rem); line-height: 1.08; }
+    .subtitle { max-width: 900px; margin: 20px 0 0; color: #e3edf4; font-size: 1.08rem; }
+    .meta { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 24px; }
+    .meta span {
+      padding: 6px 11px;
+      border: 1px solid rgba(255,255,255,.24);
+      border-radius: 999px;
+      background: rgba(255,255,255,.08);
+      color: #eaf4f7;
+      font-size: .82rem;
+    }
+
+    nav {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-bottom: 1px solid var(--line);
+      background: rgba(255, 253, 248, .93);
+      backdrop-filter: blur(12px);
+    }
+    nav .nav-inner {
+      display: flex;
+      width: min(1180px, calc(100% - 34px));
+      margin: auto;
+      gap: 18px;
+      overflow-x: auto;
+      white-space: nowrap;
+    }
+    nav a { padding: 13px 0; color: #33495c; font-size: .87rem; font-weight: 700; text-decoration: none; }
+
+    main { padding: 36px 0 72px; }
+    section { margin: 0 0 54px; scroll-margin-top: 64px; }
+    h2 { margin: 0 0 18px; color: var(--navy); font-size: 1.72rem; line-height: 1.2; }
+    h3 { margin: 28px 0 10px; color: #24465f; font-size: 1.15rem; }
+    p { margin: 10px 0; }
+    .lead { max-width: 930px; color: #394956; font-size: 1.04rem; }
+
+    .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+    .card {
+      padding: 20px;
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    .card .kicker { color: var(--teal); font-size: .78rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .card h3 { margin: 6px 0 8px; }
+    .card p { margin: 0; color: var(--muted); }
+
+    .verdict {
+      margin: 20px 0;
+      padding: 19px 22px;
+      border-left: 5px solid var(--red);
+      border-radius: 8px;
+      background: linear-gradient(90deg, var(--red-bg), #fff9f6);
+      font-size: 1.04rem;
+    }
+    .verdict strong { color: #7f2723; }
+    .note {
+      margin: 16px 0;
+      padding: 14px 17px;
+      border: 1px solid #c9dce9;
+      border-radius: 10px;
+      background: #eef7fb;
+      color: #29495d;
+    }
+
+    .pipeline {
+      display: grid;
+      grid-template-columns: 1.15fr auto 1.15fr auto 1.15fr auto 1.15fr;
+      align-items: center;
+      gap: 10px;
+      margin: 20px 0;
+    }
+    .stage {
+      min-height: 116px;
+      padding: 15px;
+      border: 1px solid #c7d1d9;
+      border-radius: 12px;
+      background: #fff;
+    }
+    .stage strong { display: block; margin-bottom: 5px; color: var(--navy); }
+    .stage small { color: var(--muted); }
+    .arrow { color: var(--blue); font-size: 1.5rem; font-weight: 800; }
+    .stage.risk { border-color: #e0a7a2; background: #fff3f1; }
+
+    .table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--card);
+      box-shadow: var(--shadow);
+    }
+    table { width: 100%; border-collapse: collapse; font-size: .91rem; }
+    th, td { padding: 13px 14px; border-bottom: 1px solid #e6e0d6; vertical-align: top; text-align: left; }
+    th { position: sticky; top: 45px; z-index: 2; color: white; background: var(--navy); font-size: .8rem; letter-spacing: .02em; }
+    tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: #faf7f0; }
+    td:first-child { min-width: 145px; font-weight: 750; }
+    .nowrap { white-space: nowrap; }
+    .tag {
+      display: inline-block;
+      margin: 2px 3px 2px 0;
+      padding: 2px 7px;
+      border-radius: 999px;
+      background: #e8eef3;
+      color: #385268;
+      font-size: .73rem;
+      font-weight: 750;
+    }
+    .tag.query { background: #eee8fa; color: var(--purple); }
+    .tag.time { background: #e4f4f0; color: #17695f; }
+    .tag.spatial { background: #e6effa; color: #265d93; }
+    .tag.temporal { background: #fff0ce; color: #855900; }
+
+    .matrix td { min-width: 125px; text-align: center; vertical-align: middle; }
+    .matrix td:first-child { min-width: 225px; text-align: left; }
+    .good { background: var(--green-bg); color: #215f38; }
+    .mixed { background: var(--amber-bg); color: #765000; }
+    .bad { background: var(--red-bg); color: #842e2a; }
+    .cell-title { display: block; font-weight: 800; }
+    .cell-note { display: block; margin-top: 3px; font-size: .76rem; opacity: .86; }
+
+    .legend { display: flex; flex-wrap: wrap; gap: 10px; margin: 12px 0 18px; }
+    .legend span { padding: 5px 9px; border-radius: 6px; font-size: .8rem; font-weight: 700; }
+
+    .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .rule-list { margin: 8px 0 0; padding-left: 1.2rem; }
+    .rule-list li { margin: 7px 0; }
+
+    .scorebar { display: grid; grid-template-columns: 180px 1fr 54px; gap: 10px; align-items: center; margin: 9px 0; }
+    .bar { height: 12px; overflow: hidden; border-radius: 999px; background: #e4e0d8; }
+    .bar > span { display: block; height: 100%; border-radius: inherit; }
+    .bar.green > span { background: var(--green); }
+    .bar.amber > span { background: #d09222; }
+    .bar.red > span { background: var(--red); }
+    .scorebar b { font-size: .82rem; text-align: right; }
+
+    .recommendation {
+      padding: 24px;
+      border: 1px solid #9bc7be;
+      border-radius: 14px;
+      background: linear-gradient(135deg, #e8f6f1, #fafffd);
+      box-shadow: var(--shadow);
+    }
+    .recommendation h3 { margin-top: 0; color: #165f58; }
+    .mono-flow {
+      margin: 15px 0;
+      padding: 15px;
+      overflow-x: auto;
+      border: 1px solid #cad7d3;
+      border-radius: 9px;
+      background: #102a43;
+      color: #e9f4f2;
+      font: 13px/1.65 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+      white-space: pre;
+    }
+
+    .references { columns: 2; column-gap: 34px; padding-left: 1.25rem; }
+    .references li { break-inside: avoid; margin: 0 0 10px; padding-right: 12px; }
+    .references small { color: var(--muted); }
+
+    footer { border-top: 1px solid var(--line); background: #ebe6dc; }
+    .footer-inner { padding: 24px 0; color: #5c655f; font-size: .84rem; }
+
+    @media (max-width: 900px) {
+      .cards, .two-col { grid-template-columns: 1fr; }
+      .pipeline { grid-template-columns: 1fr; }
+      .arrow { transform: rotate(90deg); text-align: center; }
+      .references { columns: 1; }
+      th { position: static; }
+    }
+    @media print {
+      nav { display: none; }
+      body { background: white; font-size: 11px; }
+      .hero { color: black; background: white; border-bottom: 2px solid black; }
+      .hero-inner { padding: 20px 0; }
+      .subtitle, .meta span { color: #333; }
+      .card, .table-wrap, .recommendation { box-shadow: none; }
+      section { break-inside: avoid; }
+      a { color: black; }
+    }
+  </style>
+</head>
+<body>
+  <header class="hero">
+    <div class="hero-inner">
+      <p class="eyebrow">Architecture survey · evidence synthesis · design decision</p>
+      <h1>Video VLM Token Compression Survey</h1>
+      <p class="subtitle">
+        在 VideoChat3 vision encoder 中加入 LACT，再只选择部分甚至最后一个 chunk 的视觉 token 给 LLM：
+        哪些任务可能受益，哪些性能从信息结构上就很难挽回？
+      </p>
+      <div class="meta">
+        <span>更新：2026-09-02</span>
+        <span>范围：主流/近期开放 Video VLM + compression 方法</span>
+        <span>证据：官方论文、官方代码、项目本地实验</span>
+        <span>目标：VideoChat3-LACT 设计决策</span>
+      </div>
+    </div>
+  </header>
+
+  <nav aria-label="章节导航">
+    <div class="nav-inner">
+      <a href="#summary">结论</a>
+      <a href="#setup">问题定义</a>
+      <a href="#landscape">模型横向</a>
+      <a href="#patterns">成功模式</a>
+      <a href="#tasks">任务矩阵</a>
+      <a href="#limits">不可逆边界</a>
+      <a href="#design">设计建议</a>
+      <a href="#experiments">实验方案</a>
+      <a href="#sources">来源</a>
+    </div>
+  </nav>
+
+  <main>
+    <section id="summary">
+      <h2>执行结论</h2>
+      <div class="verdict">
+        <strong>只保留最后一个 chunk，不是通用 video token compression，而是在假设最后状态是所有未知下游问题的充分统计量。</strong>
+        对 query-blind encoder 来说，这个假设通常不成立。它可能适用于低熵、全局、任务定义固定的输出；对需要时间边界、逐帧空间证据、稀有细节或多个事件—时间绑定的任务，性能往往无法靠更强 LLM 挽回。
+      </div>
+
+      <div class="cards">
+        <article class="card">
+          <div class="kicker">可能有效</div>
+          <h3>全局、冗余、低熵任务</h3>
+          <p>视频类别、主导动作、场景/主题、粗摘要、事件是否出现、固定 schema 的在线状态检测。目标可由少量累计统计量表达。</p>
+        </article>
+        <article class="card">
+          <div class="kicker">条件有效</div>
+          <h3>通用 VideoQA 与长视频检索</h3>
+          <p>需要多 slots、时间锚点、多尺度细节或 query-conditioned selection。仅靠最后 chunk 的 query-blind state 风险很高。</p>
+        </article>
+        <article class="card">
+          <div class="kicker">高概率不可恢复</div>
+          <h3>Grounding、tracking 与密集输出</h3>
+          <p>精确时间边界、dense caption、逐帧 pointing/tracking、短暂 OCR、身份重现、任意多事件计数都要求保留可寻址证据。</p>
+        </article>
+      </div>
+
+      <p class="note">
+        <strong>最推荐方向：</strong>保留 temporal anchors，优先压缩 spatial tokens。以当前每 chunk 约 64 个 merger token 为例，
+        <code>R4 × 64 tokens</code> 与 <code>R1 × 16 tokens</code> 的平均 LLM token budget 相同；后者保留 4 倍时间分辨率，更符合 temporal grounding 的需求。
+      </p>
+    </section>
+
+    <section id="setup">
+      <h2>我们实际在做什么</h2>
+      <p class="lead">
+        当前 LACT 不是在看到问题后选择证据，而是在视觉编码阶段对视频做 query-blind recurrent summarization；
+        LLM 随后只接收选中的 encoder 输出。LACT 提供“历史可以影响未来 token”的路径，但没有保证历史内容可分离、可寻址或与绝对时间绑定。
+      </p>
+
+      <div class="pipeline" role="img" aria-label="当前 VideoChat3 LACT 信息流">
+        <div class="stage"><strong>4-frame local chunk</strong><small>chunk 内 full attention；局部 4-slot temporal embedding；2D RoPE。</small></div>
+        <div class="arrow">→</div>
+        <div class="stage"><strong>Layer-wise LACT state</strong><small>apply old state，再写入当前 chunk；顺序信息隐式存在，但没有显式 absolute-time address。</small></div>
+        <div class="arrow">→</div>
+        <div class="stage risk"><strong>Post-encoder selection</strong><small>R4 select-last 或 video-last 删除多数 chunk outputs；对应 timestamps 也被压缩。</small></div>
+        <div class="arrow">→</div>
+        <div class="stage"><strong>Question + LLM</strong><small>问题此时才参与推理；被压掉的证据无法重新请求。</small></div>
+      </div>
+
+      <div class="two-col">
+        <div class="card">
+          <h3>LACT 能提供的东西</h3>
+          <ul class="rule-list">
+            <li>跨 chunk 的有序递归状态；</li>
+            <li>适合累计 presence、粗计数、趋势或状态变化；</li>
+            <li>未来 chunk token 可以包含过去语义；</li>
+            <li>固定任务经专门训练后，可学到近似 sufficient statistic。</li>
+          </ul>
+        </div>
+        <div class="card">
+          <h3>LACT 不自动提供的东西</h3>
+          <ul class="rule-list">
+            <li>过去每个事件的独立 memory slot；</li>
+            <li>事件与绝对 timestamp 的绑定；</li>
+            <li>对训练时未知问题的细节保真保证；</li>
+            <li>被删除 token 的空间坐标、文字像素和帧级身份轨迹。</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <section id="landscape">
+      <h2>主流与近期 Video VLM：压缩设计横向比较</h2>
+      <p class="lead">
+        表中“对 LACT 的启示”是基于官方实现/论文作出的工程推断。关键观察不是压缩率本身，而是模型在压缩时保留了什么结构。
+      </p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>模型 / 方法</th>
+              <th>视觉与时间组织</th>
+              <th>压缩策略</th>
+              <th>保真机制</th>
+              <th>对 last-chunk LACT 的启示</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Qwen3-VL<br><span class="tag">2025</span></td>
+              <td>Interleaved-MRoPE 分配 T/H/W 频率；使用 text–timestamp alignment，面向秒级索引与 temporal grounding。</td>
+              <td>视觉 merge 后仍保留多组时间位置；不是把整段视频变成最后一组 token。</td>
+              <td><span class="tag time">显式时间</span><span class="tag temporal">多时间组</span><span class="tag spatial">时空 PE</span></td>
+              <td>即使强 temporal PE 也不意味着可以只留最后 token；PE 保护 retained token，不能恢复被删事件。<a href="https://github.com/QwenLM/Qwen3-VL" target="_blank" rel="noreferrer">官方仓库</a> · <a href="https://arxiv.org/abs/2511.21631" target="_blank" rel="noreferrer">报告</a></td>
+            </tr>
+            <tr>
+              <td>Molmo 2<br><span class="tag">2026</span></td>
+              <td>每帧视觉 token 前插入 compact 文本 timestamp；官方 preprocessor 默认逐帧组织。</td>
+              <td>主要采用每帧 3×3 spatial pooling；保留每一采样帧的时间锚点。</td>
+              <td><span class="tag time">per-frame timestamp</span><span class="tag spatial">压空间</span></td>
+              <td>与本 survey 推荐方向最一致：时间轴保留，空间轴压缩。适合 dense caption、pointing、tracking 等监督。<a href="https://github.com/allenai/molmo2/blob/main/olmo/preprocessing/video_preprocessor.py" target="_blank" rel="noreferrer">官方代码</a> · <a href="https://github.com/allenai/molmo2" target="_blank" rel="noreferrer">仓库</a></td>
+            </tr>
+            <tr>
+              <td>MiniCPM-V 4.5 / 4.6<br><span class="tag">2025–26</span></td>
+              <td>4.5 将相邻帧组成 temporal package；3D Resampler 的 query 带 spatial 与 temporal position。</td>
+              <td>最多 6 帧联合压成 64 tokens（高压缩），但所有 packages 的输出仍按时间串联；4.6 支持任务相关的 4×/16×选择。</td>
+              <td><span class="tag temporal">temporal package</span><span class="tag spatial">latent slots</span><span class="tag time">temporal IDs</span></td>
+              <td>证明“强压缩可以工作”，但成功对象是多个带时间位置的 package slots，不是单一 final state。<a href="https://github.com/OpenBMB/MiniCPM-V" target="_blank" rel="noreferrer">官方仓库</a> · <a href="https://arxiv.org/abs/2509.18154" target="_blank" rel="noreferrer">4.5 报告</a></td>
+            </tr>
+            <tr>
+              <td>InternVL3.5 / Flash<br><span class="tag">2025</span></td>
+              <td>ViT–MLP–LLM；Dynamic High Resolution 将视频视为多图/patch 序列。</td>
+              <td>pixel shuffle 将每 patch 1024→256 tokens；Flash router 对低语义密度 patch 进一步到 64。</td>
+              <td><span class="tag spatial">patch-local 压缩</span><span class="tag">semantic router</span><span class="tag">ViCO consistency</span></td>
+              <td>压缩在局部 patch 内，且用 teacher/policy consistency 训练；没有要求最后 patch 概括所有之前 patch。<a href="https://huggingface.co/OpenGVLab/InternVL3_5-8B" target="_blank" rel="noreferrer">官方模型卡</a> · <a href="https://arxiv.org/abs/2508.18265" target="_blank" rel="noreferrer">报告</a></td>
+            </tr>
+            <tr>
+              <td>LLaVA-OneVision / SlowFast<br><span class="tag">2024–25</span></td>
+              <td>逐帧 image encoder，视觉 token 进入长上下文 LLM。</td>
+              <td>通过 spatial pooling 控制每帧 token；SlowFast 让低 FPS 路径保细节、高 FPS 路径保运动。</td>
+              <td><span class="tag spatial">空间 pooling</span><span class="tag temporal">高 FPS 粗粒度</span><span class="tag">多尺度</span></td>
+              <td>核心不是“丢帧”，而是用少量 token 覆盖所有时间，再给部分帧更多细节。<a href="https://openreview.net/pdf?id=EElFGvt39K" target="_blank" rel="noreferrer">LLaVA-OneVision</a> · <a href="https://github.com/apple/ml-slowfast-llava" target="_blank" rel="noreferrer">SlowFast 官方代码</a></td>
+            </tr>
+            <tr>
+              <td>VideoLLaMA 3<br><span class="tag">2025</span></td>
+              <td>vision-centric encoder；视频由可变数量视觉 token 表示。</td>
+              <td>依据视觉相似度减少冗余 token，而非固定只取最后帧。</td>
+              <td><span class="tag">内容自适应</span><span class="tag temporal">保变化</span><span class="tag">video-centric FT</span></td>
+              <td>相似度压缩适合静态冗余；快速动作、短文字和边界处需要保留变化 token。<a href="https://github.com/DAMO-NLP-SG/VideoLLaMA3" target="_blank" rel="noreferrer">官方仓库</a> · <a href="https://arxiv.org/abs/2501.13106" target="_blank" rel="noreferrer">论文</a></td>
+            </tr>
+            <tr>
+              <td>LongVU<br><span class="tag">ICML 2025</span></td>
+              <td>SigLIP + DINOv2；目标是 hour-long VideoQA。</td>
+              <td>DINO 相似度删冗余帧；文本 query 引导 frame/token reduction；再做跨帧 spatial reduction。</td>
+              <td><span class="tag query">query-aware</span><span class="tag">双视觉先验</span><span class="tag temporal">保非冗余帧</span></td>
+              <td>LongVU 的成功不能外推到 query-blind last-only：它在压缩前已经知道问题。<a href="https://github.com/Vision-CAIR/LongVU" target="_blank" rel="noreferrer">官方仓库</a> · <a href="https://arxiv.org/abs/2410.17434" target="_blank" rel="noreferrer">论文</a></td>
+            </tr>
+            <tr>
+              <td>LongVILA<br><span class="tag">2024–25</span></td>
+              <td>通过 context extension 和 long-video SFT 扩展到 2048+ frames。</td>
+              <td>主要路线是扩大 LLM 上下文与系统并行，而非把全部历史压到最后 token。</td>
+              <td><span class="tag temporal">保长序列</span><span class="tag">long-context SFT</span></td>
+              <td>其 needle retrieval 说明：对未知 query，保留可寻址 token 是非常强的 baseline。<a href="https://research.nvidia.com/labs/eai/publication/longvila/" target="_blank" rel="noreferrer">NVIDIA 官方页面</a></td>
+            </tr>
+            <tr>
+              <td>VideoChat-Flash / HiCo<br><span class="tag">ICLR 2026</span></td>
+              <td>从 clip-level 到 video-level 的分层建模；专门的短到长训练与 LongVid 数据。</td>
+              <td>约 1/50 hierarchical compression，并在长视频 QA/NIAH 上报告低损失。</td>
+              <td><span class="tag">层级 tokens</span><span class="tag">专门长训</span><span class="tag temporal">多跳 NIAH</span></td>
+              <td>最接近 LACT 的正面案例，但依赖层级多 token 表征和专门长视频监督；不能证明单个 final chunk 足够。<a href="https://proceedings.iclr.cc/paper_files/paper/2026/hash/b14d7175755b180dc2163e15e3110cb6-Abstract-Conference.html" target="_blank" rel="noreferrer">ICLR 论文页</a></td>
+            </tr>
+            <tr>
+              <td>PVC / Dynamic-VLM<br><span class="tag">CVPR/ICCV 2025</span></td>
+              <td>面向统一 image/video 或不同视频长度动态分配 token。</td>
+              <td>PVC progressive compression；Dynamic-VLM 动态调整 token/帧，实验最优通常仍约 64–100 tokens/frame。</td>
+              <td><span class="tag spatial">逐步压缩</span><span class="tag temporal">每帧预算</span><span class="tag">长度自适应</span></td>
+              <td>经验上仍保留每帧表示；“每帧少 token”与“多数帧零 token”不是同一假设。<a href="https://github.com/OpenGVLab/PVC" target="_blank" rel="noreferrer">PVC 官方代码</a> · <a href="https://openaccess.thecvf.com/content/ICCV2025/papers/Wang_Dynamic-VLM_Simple_Dynamic_Visual_Token_Compression_for_VideoLLM_ICCV_2025_paper.pdf" target="_blank" rel="noreferrer">Dynamic-VLM</a></td>
+            </tr>
+            <tr>
+              <td>TimeChat / VTG-LLM<br><span class="tag">2024–25</span></td>
+              <td>专门面向 temporal grounding、dense caption、highlight；把 timestamp 与视觉内容绑定。</td>
+              <td>TimeChat 使用 timestamp-aware frame encoder + sliding Q-Former；VTG-LLM 用 sequence-time embedding、absolute-time tokens 和 slot compression。</td>
+              <td><span class="tag time">absolute time</span><span class="tag temporal">sliding/slots</span><span class="tag">VTG supervision</span></td>
+              <td>说明 grounding 不是“更强语义摘要”就够了；压缩 latent 必须仍带时间知识。<a href="https://github.com/RenShuhuai-Andy/TimeChat" target="_blank" rel="noreferrer">TimeChat</a> · <a href="https://github.com/gyxxyg/VTG-LLM" target="_blank" rel="noreferrer">VTG-LLM</a></td>
+            </tr>
+            <tr>
+              <td>GroundVTS / Evidence-aware pruning<br><span class="tag">CVPR 2026</span></td>
+              <td>专门研究压缩条件下的 temporal grounding。</td>
+              <td>GroundVTS 依据文本 query 做 differentiable top-K；“Keeping the Evidence Chain”指出通用 QA pruning 直接用于 VTG 会严重退化。</td>
+              <td><span class="tag query">query-guided</span><span class="tag time">边界证据</span><span class="tag">任务专用</span></td>
+              <td>这是对 query-blind last-only 最直接的反证：VTG 需要保留边界与跨帧 evidence chain。<a href="https://github.com/Florence365/GroundVTS" target="_blank" rel="noreferrer">GroundVTS</a> · <a href="https://arxiv.org/abs/2603.05663" target="_blank" rel="noreferrer">Evidence Chain</a></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="patterns">
+      <h2>压缩成功方案的共同模式</h2>
+      <div class="cards">
+        <article class="card">
+          <div class="kicker">Pattern A</div>
+          <h3>保留时间覆盖，压缩空间密度</h3>
+          <p>Molmo 2、LLaVA SlowFast、InternVL router、PVC 都倾向让更多时间点至少留下少量 token，而不是让大段时间完全不可见。</p>
+        </article>
+        <article class="card">
+          <div class="kicker">Pattern B</div>
+          <h3>问题先于选择</h3>
+          <p>LongVU、PruneVid、GroundVTS 使用 query 或 LLM attention 决定保留什么。当前 LACT 在问题进入 LLM 前已经压缩，因此无法利用这项优势。</p>
+        </article>
+        <article class="card">
+          <div class="kicker">Pattern C</div>
+          <h3>一个时间段对应多个 latent slots</h3>
+          <p>MiniCPM 3D Resampler、VTG-LLM slots、HiCo hierarchy 都输出一组 token。单一 final chunk 的 spatial grid 并不是显式的历史 slot bank。</p>
+        </article>
+        <article class="card">
+          <div class="kicker">Pattern D</div>
+          <h3>显式时间身份不随压缩消失</h3>
+          <p>Qwen3-VL 的 T/H/W position 与 timestamp alignment、Molmo 2 的 per-frame timestamp、VTG-LLM absolute-time token 都保留“何时”。</p>
+        </article>
+        <article class="card">
+          <div class="kicker">Pattern E</div>
+          <h3>多尺度旁路保护稀有细节</h3>
+          <p>SlowFast、LongVU 双 encoder 等方案让高时间覆盖与高空间细节走不同路径，避免一个统一压缩率同时伤害两类信息。</p>
+        </article>
+        <article class="card">
+          <div class="kicker">Pattern F</div>
+          <h3>压缩策略本身经过监督</h3>
+          <p>InternVL ViCO、VideoChat-Flash short-to-long、GroundVTS progressive optimization 都训练压缩器。零 gate + 短 SFT 很难学成通用历史编码器。</p>
+        </article>
+      </div>
+
+      <h3>为什么“VideoQA 平均分不掉”不能证明 grounding 安全</h3>
+      <p>
+        TTF 报告在 Qwen3-VL 上删除约 67% token 仍保留 99.5% baseline accuracy，ForestPrune 报告 LLaVA-OneVision 删除 90% token 后保留 95.8% 平均准确率；
+        这说明大量视频确实冗余，但这些平均值主要来自通用 QA/MCQ。专门面向 VTG 的研究则指出，朴素复用通用 pruning objective 会在边界敏感任务上显著退化。
+        因而“平均 QA 容忍高压缩”与“可以精确恢复时间边界”是两件不同的事。
+        <a href="https://arxiv.org/abs/2605.07355" target="_blank" rel="noreferrer">TTF</a> ·
+        <a href="https://openaccess.thecvf.com/content/CVPR2026F/html/Ju_ForestPrune_High-ratio_Visual_Token_Compression_for_Video_Multimodal_Large_Language_CVPRF_2026_paper.html" target="_blank" rel="noreferrer">ForestPrune</a> ·
+        <a href="https://arxiv.org/abs/2603.05663" target="_blank" rel="noreferrer">Keeping the Evidence Chain</a>
+      </p>
+    </section>
+
+    <section id="tasks">
+      <h2>任务可恢复性矩阵</h2>
+      <p class="lead">
+        这里评估的是“vision encoder 已看完整视频，LACT recurrent state 连续，但 LLM 只见 R4 select-last 或 video-last”这一具体设置。
+        绿色不代表一定提升，而是信息目标有机会由小状态表达；红色表示删除证据后，即使语言模型很强也缺少必要观测。
+      </p>
+      <div class="legend">
+        <span class="good">较可能保留</span>
+        <span class="mixed">强依赖设计与监督</span>
+        <span class="bad">高概率不可恢复</span>
+      </div>
+
+      <div class="table-wrap">
+        <table class="matrix">
+          <thead>
+            <tr>
+              <th>任务</th>
+              <th>R4 select-last</th>
+              <th>video-last</th>
+              <th>若加入 time-aware multi-slot LACT</th>
+              <th>主要瓶颈</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>视频类别 / 主题 / 场景</td>
+              <td class="good"><span class="cell-title">较可行</span><span class="cell-note">高冗余全局语义</span></td>
+              <td class="good"><span class="cell-title">可能可行</span><span class="cell-note">固定标签尤其适合</span></td>
+              <td class="good"><span class="cell-title">可行</span></td>
+              <td>是否出现足够代表性片段</td>
+            </tr>
+            <tr>
+              <td>主导动作 / activity recognition</td>
+              <td class="good"><span class="cell-title">较可行</span></td>
+              <td class="mixed"><span class="cell-title">有条件</span><span class="cell-note">动作短暂时失败</span></td>
+              <td class="good"><span class="cell-title">可行</span></td>
+              <td>动作是否可累计为低维状态</td>
+            </tr>
+            <tr>
+              <td>粗粒度视频摘要 / 单句 caption</td>
+              <td class="good"><span class="cell-title">较可行</span></td>
+              <td class="mixed"><span class="cell-title">有条件</span><span class="cell-note">容易只讲结尾</span></td>
+              <td class="good"><span class="cell-title">较可行</span></td>
+              <td>覆盖度、rare-event retention</td>
+            </tr>
+            <tr>
+              <td>事件 presence / 内容审核</td>
+              <td class="good"><span class="cell-title">可行</span></td>
+              <td class="mixed"><span class="cell-title">有条件</span></td>
+              <td class="good"><span class="cell-title">可行</span></td>
+              <td>固定 ontology 可用 OR-like state</td>
+            </tr>
+            <tr>
+              <td>普通 VideoQA / MCQ</td>
+              <td class="mixed"><span class="cell-title">取决于问题</span></td>
+              <td class="bad"><span class="cell-title">风险高</span></td>
+              <td class="mixed"><span class="cell-title">可改善</span><span class="cell-note">仍最好 query-aware</span></td>
+              <td>压缩时尚不知道问题</td>
+            </tr>
+            <tr>
+              <td>相对顺序：A 在 B 前后？</td>
+              <td class="mixed"><span class="cell-title">可能保留</span></td>
+              <td class="mixed"><span class="cell-title">脆弱</span></td>
+              <td class="good"><span class="cell-title">可行</span></td>
+              <td>递归有顺序，但需可解码 slots</td>
+            </tr>
+            <tr>
+              <td>因果 / 多跳跨事件推理</td>
+              <td class="mixed"><span class="cell-title">有条件</span></td>
+              <td class="bad"><span class="cell-title">风险很高</span></td>
+              <td class="mixed"><span class="cell-title">有机会</span></td>
+              <td>多个独立事件及其关系需同时可见</td>
+            </tr>
+            <tr>
+              <td>长视频 needle retrieval</td>
+              <td class="mixed"><span class="cell-title">有条件</span><span class="cell-note">训练分布决定</span></td>
+              <td class="bad"><span class="cell-title">query-blind 困难</span></td>
+              <td class="mixed"><span class="cell-title">需 slot / query</span></td>
+              <td>未知 needle 的高熵细节</td>
+            </tr>
+            <tr>
+              <td>事件计数 / 重复动作计数</td>
+              <td class="mixed"><span class="cell-title">固定目标可学</span></td>
+              <td class="mixed"><span class="cell-title">固定目标可学</span></td>
+              <td class="good"><span class="cell-title">更适合</span></td>
+              <td>任意 query 定义的计数对象无法预知</td>
+            </tr>
+            <tr>
+              <td>Temporal grounding / moment retrieval</td>
+              <td class="bad"><span class="cell-title">明显受损</span><span class="cell-note">时间分辨率量化</span></td>
+              <td class="bad"><span class="cell-title">基本不可用</span></td>
+              <td class="mixed"><span class="cell-title">可挽回部分</span></td>
+              <td>start/end boundary 与 absolute time binding</td>
+            </tr>
+            <tr>
+              <td>Dense video captioning / 时间线</td>
+              <td class="bad"><span class="cell-title">损失事件密度</span></td>
+              <td class="bad"><span class="cell-title">不可恢复</span></td>
+              <td class="mixed"><span class="cell-title">需随时长扩展 slots</span></td>
+              <td>输出熵随事件数增长，固定 state 不扩展</td>
+            </tr>
+            <tr>
+              <td>Highlight detection / 每段 relevance</td>
+              <td class="bad"><span class="cell-title">边界与分数受损</span></td>
+              <td class="bad"><span class="cell-title">不可恢复</span></td>
+              <td class="mixed"><span class="cell-title">需 temporal slots</span></td>
+              <td>需要对每个时间段分别打分</td>
+            </tr>
+            <tr>
+              <td>视频 OCR / 短暂文字读取</td>
+              <td class="bad"><span class="cell-title">高风险</span></td>
+              <td class="bad"><span class="cell-title">不可恢复</span></td>
+              <td class="mixed"><span class="cell-title">仍需细节旁路</span></td>
+              <td>精确字符是高频高熵信息</td>
+            </tr>
+            <tr>
+              <td>Pointing / tracking / Ref-VOS</td>
+              <td class="bad"><span class="cell-title">不适配</span></td>
+              <td class="bad"><span class="cell-title">不可恢复</span></td>
+              <td class="bad"><span class="cell-title">仅 latent 不够</span></td>
+              <td>必须保留逐帧坐标、identity 与对应 patch</td>
+            </tr>
+            <tr>
+              <td>“在 02:17 发生了什么？”</td>
+              <td class="bad"><span class="cell-title">anchor 可能已删</span></td>
+              <td class="bad"><span class="cell-title">不可寻址</span></td>
+              <td class="mixed"><span class="cell-title">需 absolute-time key</span></td>
+              <td>随机访问要求 addressable memory</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="limits">
+      <h2>哪些性能一旦压掉就无法由 LLM 挽回</h2>
+      <div class="two-col">
+        <article class="card">
+          <h3>1. Query-blind sufficient-statistic 不可能覆盖任意问题</h3>
+          <p>假设视频包含姓名、车牌、动作次数、多个物体属性和几十个事件。压缩发生时问题未知，固定 final state 必须同时保留所有可能被问到的细节。随着视频长度增长，这是不可持续的。</p>
+        </article>
+        <article class="card">
+          <h3>2. 顺序记忆不等于绝对时间记忆</h3>
+          <p>递归 state 可以区分“先后”，但没有 timestamp-conditioned K/V 时，无法稳定恢复“发生在第几秒”。只给最终 token 一个 timestamp 会把历史内容错误归到最终时间。</p>
+        </article>
+        <article class="card">
+          <h3>3. 单次 readout 暴露不了完整 state</h3>
+          <p>最后 chunk token 是由当前 chunk query 读取 fast state 的结果。即使 state 内仍有信息，没有针对下游问题的 query，也未必能把所需历史维度读出来给 LLM。</p>
+        </article>
+        <article class="card">
+          <h3>4. Dense 输出要求 representation 随时长扩展</h3>
+          <p>一段视频若有 N 个独立事件，dense caption、tracking、timeline 的输出信息量通常随 N 增长。固定大小 final state 不随 N 扩展，最终必然发生碰撞或遗忘。</p>
+        </article>
+        <article class="card">
+          <h3>5. 空间坐标不能从纯语义 summary 重建</h3>
+          <p>pointing、tracking、Ref-VOS 依赖原 patch/frame 对应关系。删除 token 后只剩语义向量，LLM 无法恢复被删除的像素位置和遮挡轨迹。</p>
+        </article>
+        <article class="card">
+          <h3>6. 高压缩 benchmark 结果常被任务分布掩盖</h3>
+          <p>MCQ 常能借助语言先验、全局动作和冗余帧作答；这不会测试短暂 OCR、精确边界或任意 needle。必须按任务信息需求分层评估。</p>
+        </article>
+      </div>
+
+      <h3>本项目现有证据</h3>
+      <p>以下均为 TimeLens-Bench native mIoU；配置并非完全单变量对照，但差距方向一致，足以说明 temporal bottleneck 很强。</p>
+      <div class="card">
+        <div class="scorebar"><span>Base all-token v15</span><div class="bar green"><span style="width: 100%"></span></div><b>46.65</b></div>
+        <div class="scorebar"><span>Untrained Base R4 mean</span><div class="bar amber"><span style="width: 82.5%"></span></div><b>38.50</b></div>
+        <div class="scorebar"><span>v12 LACT R4 select</span><div class="bar amber"><span style="width: 67.2%"></span></div><b>31.38</b></div>
+        <div class="scorebar"><span>Base video-last v14</span><div class="bar red"><span style="width: 16.2%"></span></div><b>7.53</b></div>
+        <p><small>数值为 Charades / ActivityNet / QVHighlights 三个 mIoU 的简单平均；原始分项见项目 <code>exp_results.md</code>。video-last 在三个子集分别只有 11.80 / 7.74 / 3.06。</small></p>
+      </div>
+    </section>
+
+    <section id="design">
+      <h2>对 VideoChat3-LACT 的设计建议</h2>
+      <div class="recommendation">
+        <h3>推荐主线：R1 temporal coverage + spatial compression + time-aware LACT</h3>
+        <div class="mono-flow">每个 4-frame chunk
+  → local VideoChat3 attention
+  → LACT update(K, V, absolute_time, Δt)
+  → spatial resampler: 64 → 8/16 visual tokens
+  → 2–4 LACT memory readout tokens（可选）
+  → [timestamp / interval] + visual tokens
+  → LLM
+
+保留：每个 chunk 的时间锚点、顺序、粗空间证据
+压缩：同一时间点内部的空间冗余
+扩展：输出 token 数随视频时长线性但低斜率增长</div>
+        <p><strong>为什么优于 R4 select-last：</strong>在近似相同 LLM token budget 下，它不把 3/4 时间点变成“只有隐式 state、没有显式地址”的信息。</p>
+      </div>
+
+      <div class="table-wrap" style="margin-top:18px">
+        <table>
+          <thead>
+            <tr><th>优先级</th><th>改动</th><th>预期收益</th><th>代价 / 风险</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>P0</td>
+              <td>保留所有 chunk timestamps；视觉 token 改为每 chunk spatial 64→16。</td>
+              <td>同等平均 token budget 下恢复 4× temporal anchors；最直接保护 grounding。</td>
+              <td>需训练 spatial resampler；每 chunk 均有少量 LLM token。</td>
+            </tr>
+            <tr>
+              <td>P0</td>
+              <td>把 absolute timestamp、normalized time 和 Δt embedding 注入 LACT update K/V 与 read query。</td>
+              <td>让 state 能绑定内容与时间，而不是只隐式记录次序。</td>
+              <td>改变 FW 模型；需从初始化重新训练。</td>
+            </tr>
+            <tr>
+              <td>P1</td>
+              <td>每个 macro group 输出多个 memory slots，并附 <code>[t_start,t_end]</code>；不要只复用最后 chunk grid。</td>
+              <td>不同事件可分离，readout 不再完全由最终帧内容决定。</td>
+              <td>slot 数与任务覆盖需调参。</td>
+            </tr>
+            <tr>
+              <td>P1</td>
+              <td>SlowFast 双路：所有 chunk 保留 1–4 个 motion/global tokens；稀疏关键 chunk 保留较多 spatial tokens。</td>
+              <td>兼顾时间覆盖和细节；已有 SlowFast/LongVU 先例。</td>
+              <td>需要关键帧策略，最好用变化度而非固定最后帧。</td>
+            </tr>
+            <tr>
+              <td>P2</td>
+              <td>问题可提前获得时，做 query-conditioned LACT readout 或二阶段检索。</td>
+              <td>显著改善 needle、任意属性 QA 和 VTG。</td>
+              <td>同一视频换问题时需重做轻量 readout；缓存接口更复杂。</td>
+            </tr>
+            <tr>
+              <td>限定用途</td>
+              <td>video-last 仅用于固定 ontology 分类、在线告警、全局摘要等低熵任务。</td>
+              <td>极致 LLM token reduction。</td>
+              <td>不要将其作为通用 VideoQA / grounding 表征。</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section id="experiments">
+      <h2>建议的等预算实验</h2>
+      <p class="lead">先比较信息布局，不要同时改变数据、训练步数、LLM、采样和解码协议。所有评估继续使用 native generation/scoring。</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>变体</th><th>LLM 视觉预算</th><th>时间信息</th><th>要回答的问题</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>A · R4 select-last</td><td>当前基线：64 / 4 = 16 tokens/chunk</td><td>每 4 chunk 一个 timestamp</td><td>当前 compression 能力基线。</td></tr>
+            <tr><td>B · R1 spatial-16</td><td>16 tokens/chunk</td><td>每 chunk timestamp</td><td>同预算下，压空间是否显著优于压时间？</td></tr>
+            <tr><td>C · R1 spatial-8 + memory-8</td><td>8 local + 8 LACT tokens/chunk</td><td>每 chunk timestamp</td><td>LACT summary 是否能替代一半空间 token？</td></tr>
+            <tr><td>D · R4 multi-slot</td><td>每组总计 64 tokens</td><td>start/end + slot time IDs</td><td>多个 time-aware slots 能否修复 select-last？</td></tr>
+            <tr><td>E · Query-aware top-K</td><td>与 A 相同</td><td>保留选中 token 原 timestamp</td><td>未知 query 是否是主要瓶颈？</td></tr>
+            <tr><td>F · video-last</td><td>单 grid</td><td>仅 final / 或全 timestamp 文本</td><td>作为信息下界，不作为预期主模型。</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>评估必须覆盖四类互补任务</h3>
+      <div class="cards">
+        <article class="card"><div class="kicker">Global</div><h3>通用理解</h3><p>Video-MME、MVBench；判断全局 QA 是否能在压缩下保持。</p></article>
+        <article class="card"><div class="kicker">Temporal</div><h3>精确时间</h3><p>TimeLens-Bench、Charades、ActivityNet、QVHighlights；报告 R1@0.3/0.5/0.7 与 mIoU。</p></article>
+        <article class="card"><div class="kicker">Retrieval</div><h3>稀有证据</h3><p>单 needle 与 multi-hop NIAH；控制 needle 时间位置、持续长度和问题是否提前可见。</p></article>
+        <article class="card"><div class="kicker">Dense</div><h3>密集与细节</h3><p>dense caption、短暂 OCR、计数；检查压缩是否只保留视频主旨。</p></article>
+        <article class="card"><div class="kicker">Ablation</div><h3>状态贡献</h3><p>continuous / reset / gate-zero，比较 native 输出；不要以 teacher-forced NLL 替代正式指标。</p></article>
+        <article class="card"><div class="kicker">Efficiency</div><h3>真实成本</h3><p>vision FLOPs、LLM prefill、peak memory、端到端 latency；区分 encoder 和 LLM 节省。</p></article>
+      </div>
+
+      <p class="note"><strong>决策规则：</strong>若 B 在相同 token budget 下稳定胜过 A，说明主要瓶颈是 temporal anchor 丢失，应停止继续扩大固定 temporal select factor。若 D 仍无法接近 B，则单纯增加 LACT slots 不足，需要 query-aware retrieval 或保留更细时间网格。</p>
+    </section>
+
+    <section id="sources">
+      <h2>来源与阅读索引</h2>
+      <p class="lead">优先列官方论文、官方仓库和官方实现。不同论文的 benchmark、帧数、token budget 和训练数据不可直接横向比较；本 survey 使用它们识别设计模式，不制作未经校准的总榜。</p>
+      <ol class="references">
+        <li><a href="https://github.com/QwenLM/Qwen3-VL" target="_blank" rel="noreferrer">Qwen3-VL official repository</a>；<a href="https://arxiv.org/abs/2511.21631" target="_blank" rel="noreferrer">Technical Report</a>。<small>Interleaved-MRoPE、DeepStack、text–timestamp alignment。</small></li>
+        <li><a href="https://github.com/allenai/molmo2" target="_blank" rel="noreferrer">Molmo 2 official repository</a>；<a href="https://github.com/allenai/molmo2/blob/main/olmo/preprocessing/video_preprocessor.py" target="_blank" rel="noreferrer">video preprocessor</a>。<small>逐帧 timestamp 与 spatial pooling。</small></li>
+        <li><a href="https://github.com/OpenBMB/MiniCPM-V" target="_blank" rel="noreferrer">MiniCPM-V official repository</a>；<a href="https://arxiv.org/abs/2509.18154" target="_blank" rel="noreferrer">MiniCPM-V 4.5 report</a>。<small>3D Resampler、temporal packages、mixed compression。</small></li>
+        <li><a href="https://huggingface.co/OpenGVLab/InternVL3_5-8B" target="_blank" rel="noreferrer">InternVL3.5 official model card</a>；<a href="https://arxiv.org/abs/2508.18265" target="_blank" rel="noreferrer">report</a>。<small>ViR、pixel shuffle、ViCO consistency。</small></li>
+        <li><a href="https://openreview.net/pdf?id=EElFGvt39K" target="_blank" rel="noreferrer">LLaVA-OneVision</a>；<a href="https://github.com/apple/ml-slowfast-llava" target="_blank" rel="noreferrer">SlowFast-LLaVA official repository</a>。</li>
+        <li><a href="https://github.com/DAMO-NLP-SG/VideoLLaMA3" target="_blank" rel="noreferrer">VideoLLaMA 3 official repository</a>；<a href="https://arxiv.org/abs/2501.13106" target="_blank" rel="noreferrer">paper</a>。</li>
+        <li><a href="https://github.com/Vision-CAIR/LongVU" target="_blank" rel="noreferrer">LongVU official repository</a>；<a href="https://arxiv.org/abs/2410.17434" target="_blank" rel="noreferrer">paper</a>。<small>query-aware spatiotemporal compression。</small></li>
+        <li><a href="https://research.nvidia.com/labs/eai/publication/longvila/" target="_blank" rel="noreferrer">LongVILA official project page</a>。<small>长上下文和 long-video SFT 路线。</small></li>
+        <li><a href="https://proceedings.iclr.cc/paper_files/paper/2026/hash/b14d7175755b180dc2163e15e3110cb6-Abstract-Conference.html" target="_blank" rel="noreferrer">VideoChat-Flash / HiCo, ICLR 2026</a>。</li>
+        <li><a href="https://github.com/OpenGVLab/PVC" target="_blank" rel="noreferrer">PVC official repository</a>；<a href="https://openaccess.thecvf.com/content/CVPR2025/papers/Yang_PVC_Progressive_Visual_Token_Compression_for_Unified_Image_and_Video_CVPR_2025_paper.pdf" target="_blank" rel="noreferrer">CVPR 2025 paper</a>。</li>
+        <li><a href="https://openaccess.thecvf.com/content/ICCV2025/papers/Wang_Dynamic-VLM_Simple_Dynamic_Visual_Token_Compression_for_VideoLLM_ICCV_2025_paper.pdf" target="_blank" rel="noreferrer">Dynamic-VLM, ICCV 2025</a>。</li>
+        <li><a href="https://github.com/Visual-AI/PruneVid" target="_blank" rel="noreferrer">PruneVid official repository, ACL 2025</a>。<small>LLM attention / query relevance。</small></li>
+        <li><a href="https://openaccess.thecvf.com/content/CVPR2026F/html/Ju_ForestPrune_High-ratio_Visual_Token_Compression_for_Video_Multimodal_Large_Language_CVPRF_2026_paper.html" target="_blank" rel="noreferrer">ForestPrune, CVPR Findings 2026</a>。</li>
+        <li><a href="https://arxiv.org/abs/2605.07355" target="_blank" rel="noreferrer">Temporal Token Fusion, 2026</a>。<small>Qwen3-VL 上的 pre-LLM temporal fusion。</small></li>
+        <li><a href="https://arxiv.org/abs/2603.05663" target="_blank" rel="noreferrer">Keeping the Evidence Chain, 2026</a>。<small>解释通用 pruning 对 VTG 的边界敏感退化。</small></li>
+        <li><a href="https://github.com/RenShuhuai-Andy/TimeChat" target="_blank" rel="noreferrer">TimeChat official repository</a>；<a href="https://openaccess.thecvf.com/content/CVPR2024/papers/Ren_TimeChat_A_Time-sensitive_Multimodal_Large_Language_Model_for_Long_Video_CVPR_2024_paper.pdf" target="_blank" rel="noreferrer">CVPR 2024 paper</a>。</li>
+        <li><a href="https://github.com/gyxxyg/VTG-LLM" target="_blank" rel="noreferrer">VTG-LLM official repository</a>；<a href="https://ojs.aaai.org/index.php/AAAI/article/download/32341/34496" target="_blank" rel="noreferrer">AAAI 2025 paper</a>。</li>
+        <li><a href="https://github.com/WHB139426/Grounded-Video-LLM" target="_blank" rel="noreferrer">Grounded-VideoLLM official repository</a>。<small>temporal stream 与 discrete time tokens。</small></li>
+        <li><a href="https://github.com/Florence365/GroundVTS" target="_blank" rel="noreferrer">GroundVTS official repository, CVPR 2026</a>。<small>query-guided differentiable top-K。</small></li>
+        <li><a href="https://github.com/yaolinli/TimeChat-Online" target="_blank" rel="noreferrer">TimeChat-Online official repository</a>。<small>Differential Token Drop 与 retained-position reservation。</small></li>
+      </ol>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-inner">
+      本文档面向 `/data/yibo/VideoChat3` 的 LACT 设计讨论。结论区分“来源直接报告”与“基于架构的信息论/工程推断”；最终模型选择应由等 token-budget、同训练协议的 native evaluation 决定。
+    </div>
+  </footer>
+</body>
+</html>
