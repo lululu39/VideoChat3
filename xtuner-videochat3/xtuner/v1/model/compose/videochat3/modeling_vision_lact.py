@@ -16,7 +16,10 @@ from .modeling_vision import (
     VideoChat3VisionPatchEmbed,
     patch_merger,
 )
-from .macro_temporal import compress_chunk_outputs
+from .macro_temporal import (
+    compress_chunk_outputs,
+    resolve_macro_temporal_compression_mode,
+)
 from .videochat3_config import VideoChat3LACTVisionConfig
 
 
@@ -1558,7 +1561,10 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
             chunk_outputs,
             video_clip_counts,
             self.config.macro_temporal_compression_factor,
-            mode="select_last",
+            mode=resolve_macro_temporal_compression_mode(
+                self.config.macro_temporal_compression_mode,
+                default="select_last",
+            ),
         )
 
     def set_lact_inference_state_mode(self, mode: str) -> None:

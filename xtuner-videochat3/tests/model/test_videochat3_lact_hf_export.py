@@ -105,6 +105,9 @@ def _write_tiny_base_config(path: Path, model_config) -> None:
         "vision_end_token_id": model_config.vision_end_token_id,
     }
     (path / "config.json").write_text(json.dumps(config, indent=2))
+    (path / "processor_config.json").write_text(
+        json.dumps({"processor_class": "VideoChat3Processor"}, indent=2)
+    )
 
 
 def test_lact_only_config_freezes_every_original_vision_parameter():
@@ -186,6 +189,7 @@ def test_hf_interval_save_loads_independent_lact_model(tmp_path):
     assert saved_config["vision_config"]["model_type"] == "videochat3_lact_vision"
     assert saved_config["vision_config"]["clip_ns_grad_ratio"] is False
     assert saved_config["vision_config"]["clip_state_grad_ratio"] is True
+    assert saved_config["vision_config"]["macro_temporal_compression_mode"] == "auto"
     assert saved_config["architectures"] == ["VideoChat3LACTForConditionalGeneration"]
     assert saved_config["auto_map"]["AutoModelForCausalLM"] == (
         "modeling_videochat3_lact.VideoChat3LACTForConditionalGeneration"
@@ -199,6 +203,7 @@ def test_hf_interval_save_loads_independent_lact_model(tmp_path):
     assert type(hf_config.vision_config).__name__ == ("VideoChat3LACTVisionConfig")
     assert hf_config.vision_config.clip_ns_grad_ratio is False
     assert hf_config.vision_config.clip_state_grad_ratio is True
+    assert hf_config.vision_config.macro_temporal_compression_mode == "auto"
     hf_model, loading_info = AutoModelForCausalLM.from_pretrained(
         save_path,
         trust_remote_code=True,

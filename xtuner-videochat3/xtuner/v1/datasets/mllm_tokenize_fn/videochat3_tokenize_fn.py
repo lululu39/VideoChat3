@@ -25,6 +25,7 @@ from xtuner.v1.model.compose.videochat3.macro_temporal import (
     compress_timestamps,
     macro_clip_count,
     macro_video_token_count,
+    resolve_macro_temporal_compression_mode,
     validate_macro_temporal_compression_factor,
 )
 
@@ -230,6 +231,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
         video_read_type: str | None = None,
         video_frame_multiple: int = 1,
         macro_temporal_compression_factor: int = 1,
+        macro_temporal_compression_mode: str = "auto",
         system_message: str | None = None,
         add_vision_id: bool = False,
         max_length: int | None = None,
@@ -267,6 +269,10 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
         self.macro_temporal_compression_factor = validate_macro_temporal_compression_factor(
             macro_temporal_compression_factor
         )
+        self.macro_temporal_compression_mode = resolve_macro_temporal_compression_mode(
+            macro_temporal_compression_mode,
+            default="mean",
+        )
 
         self.add_vision_id = add_vision_id
     
@@ -280,6 +286,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             f"video_min_frames: {video_min_frames}, video_max_frames: {video_max_frames}, fixed_num_sampled_frames: {fixed_num_sampled_frames}, video_sample_fps: {video_sample_fps},"
             f"video_read_type: {self.video_read_type}, video_frame_multiple: {self.video_frame_multiple}, "
             f"macro_temporal_compression_factor: {self.macro_temporal_compression_factor}, "
+            f"macro_temporal_compression_mode: {self.macro_temporal_compression_mode}, "
             f"add_vision_id: {self.add_vision_id}, "
             f"spatial_merge_length: {self.spatial_merge_length}, temporal_merge_length: {self.temporal_merge_length}"
         )
@@ -305,6 +312,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             f"{self.video_read_type}_"
             f"{self.video_frame_multiple}_"
             f"{self.macro_temporal_compression_factor}_"
+            f"{self.macro_temporal_compression_mode}_"
             f"{self.add_vision_id}_"
             f"{self.spatial_merge_length}_"
             f"{self.temporal_merge_length}_"
@@ -511,6 +519,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
                                 curr_timestamp = compress_timestamps(
                                     curr_timestamp,
                                     self.macro_temporal_compression_factor,
+                                    mode=self.macro_temporal_compression_mode,
                                 )
                                 video_tokens = ""
                                 frame_seqlen = video_grid_thw[current_video_idx][1:].prod() // merge_length
@@ -546,6 +555,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             temporal_merge_size=self.video_processor.temporal_merge_size,
             spatial_merge_size=self.video_processor.merge_size,
             factor=self.macro_temporal_compression_factor,
+            mode=self.macro_temporal_compression_mode,
         )
 
     def pure_text_get_item(self, data_item: dict) -> VideoChat3DataItem:
@@ -744,6 +754,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             num_clips = macro_clip_count(
                 original_clips,
                 self.macro_temporal_compression_factor,
+                mode=self.macro_temporal_compression_mode,
             )
             num_img_tokens += num_video_token +  num_clips * 2
         
@@ -775,6 +786,12 @@ class VideoChat3TokenizeFnConfig(BaseMLLMTokenizeFnConfig):
     video_read_type: str | None = None
     video_frame_multiple: int = 1
     macro_temporal_compression_factor: Literal[1, 2, 4, 8] = 1
+    macro_temporal_compression_mode: Literal[
+        "auto",
+        "mean",
+        "select_last",
+        "video_last",
+    ] = "auto"
     # When handling multiple images, it's helpful to add labels to the images and videos for better reference.
     add_vision_id: bool = False
 
@@ -796,6 +813,7 @@ class VideoChat3TokenizeFnConfig(BaseMLLMTokenizeFnConfig):
             video_read_type=self.video_read_type,
             video_frame_multiple=self.video_frame_multiple,
             macro_temporal_compression_factor=self.macro_temporal_compression_factor,
+            macro_temporal_compression_mode=self.macro_temporal_compression_mode,
             video_max_total_pixels=self.video_max_total_pixels,
             add_vision_id=self.add_vision_id,
             max_length=self.max_length,

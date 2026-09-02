@@ -529,6 +529,22 @@ Real 8xH100 FSDP/TimeLens smokes validate both linear variants and initializatio
 
 Startup validation: all ranks loaded the intended `143.0M` Linear-FW plus `33.0M` projector scope with original ViT/LM frozen, group 1, no FW ratio clip, and no resume. Step 1 has global CE `0.627007`, finite pre-clip global norm `2.8850`, and the expected zero first warmup LR. The largest rank reports `66.49 GB` allocated / `69.13 GB` reserved; there is no OOM, NaN, invalid norm, or skipped step. Rank times are `193.62-243.90s`, including `56.65-106.92s` data wait, for an initial ETA of roughly 5-6 hours. Active run directory: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-nofwclip-v12/20260901230616`; native log: `torchrun_logs/training_20260901_230558_datava270000004.log`.
 
+## v13 - Linear16 + Delta Last-Chunk Token Select, TimeLens Random Half
+
+**Status:** Prepared for launch from the same local initialization/data as v12.
+
+- Objective: isolate whether the train signal can still improve when the full LACT recurrent vision scan processes every four-frame chunk, but the LLM receives only the final chunk's post-merger visual tokens and final timestamp placeholder for each video.
+- Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; same Base-exact Linear16 share-init path as v12.
+- Data: same seed-42 12,624-row TimeLens random-half manifest over 8,985 videos.
+- Trainable scope: same as v12, all `143,887,104` Linear-FW parameters plus all `33,039,616` projector parameters; original ViT and 4B LM frozen.
+- Memory/update: same as v12, `memory_type=linear`, 16 heads, `inner_optim=delta`, group 1, continuous per-video state, final update skipped.
+- Visual compression: keeps `VIDEOCHAT3_MACRO_TEMPORAL_COMPRESSION_FACTOR=4` but sets `VIDEOCHAT3_MACRO_TEMPORAL_COMPRESSION_MODE=video_last`, so each video contributes one final chunk's spatial token grid to the LLM instead of v12's one token grid per four chunks.
+- Optimizer/schedule/stabilization: same as v12, FW/projector AdamW `2e-5 -> 1e-6`, 3% warmup, cosine decay, no FW ratio clip, and global grad clip 1.0.
+- Hardware and packing: 8xH100 ordinary FSDP, global batch 16, 8K sample/pack length, TimeLens 2 FPS, 64-448 frames, total-pixel budget 14,680,064, and cache dir `dataset_cache/cache_videochat3_4B_lact_linear16_delta_lastchunk_timelens_random12624_s8k_v13`.
+- Training W&B: [`v13`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-delta-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-nofwclip-v13).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_LASTCHUNK_FWProj_train_timelens_r4_v13.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s8k-lr2e5-nofwclip-v13/<timestamp>/hf-<final-step>`, with the final step determined by the rebuilt last-chunk cache.
+
 ### Retired 2K Precursor
 
 The prior W&B run is [`v12-2K`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-delta-r4select-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s2k-lr2e5-nofwclip-v12). It used the same model, data, optimizer, LR, no-FW-clip policy, and global batch; only packing differs from the clean 8K restart.

@@ -42,6 +42,7 @@ def export_lact_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
         "temporal_patch_size",
         "temporal_merge_size",
         "macro_temporal_compression_factor",
+        "macro_temporal_compression_mode",
         "init_pos_emb_height",
         "init_pos_emb_width",
         "memory_type",
@@ -88,6 +89,9 @@ def export_lact_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
     processor_config["processor_class"] = "VideoChat3LACTProcessor"
     processor_config["macro_temporal_compression_factor"] = (
         vision_config.macro_temporal_compression_factor
+    )
+    processor_config["macro_temporal_compression_mode"] = (
+        vision_config.macro_temporal_compression_mode
     )
     processor_config.setdefault("auto_map", {})["AutoProcessor"] = (
         "processing_videochat3_lact.VideoChat3LACTProcessor"

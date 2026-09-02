@@ -47,6 +47,10 @@ cache_dir = Path(
 macro_temporal_compression_factor = int(
     os.getenv("VIDEOCHAT3_MACRO_TEMPORAL_COMPRESSION_FACTOR", "1")
 )
+macro_temporal_compression_mode = os.getenv(
+    "VIDEOCHAT3_MACRO_TEMPORAL_COMPRESSION_MODE",
+    "auto",
+)
 model_variant = os.getenv("VIDEOCHAT3_MODEL_VARIANT", "lact")
 train_projector = env_bool("VIDEOCHAT3_TRAIN_PROJECTOR")
 
@@ -70,6 +74,7 @@ if model_variant == "lact":
                 os.getenv("VIDEOCHAT3_FW_UPDATE_LAYER_GROUP_SIZE", "1")
             ),
             macro_temporal_compression_factor=macro_temporal_compression_factor,
+            macro_temporal_compression_mode=macro_temporal_compression_mode,
         ),
     )
 elif model_variant == "base-vit-projector":
@@ -80,6 +85,7 @@ elif model_variant == "base-vit-projector":
         vision_config=VideoChat3VisionConfig(
             attn_impl="flash_attention_2",
             macro_temporal_compression_factor=macro_temporal_compression_factor,
+            macro_temporal_compression_mode=macro_temporal_compression_mode,
         ),
     )
 else:
@@ -165,6 +171,7 @@ for name, data in dataset_collections.items():
                 video_read_type=data.get("video_read_type"),
                 video_frame_multiple=data.get("video_frame_multiple", 1),
                 macro_temporal_compression_factor=macro_temporal_compression_factor,
+                macro_temporal_compression_mode=macro_temporal_compression_mode,
                 processor_path=str(model_path),
                 data_augment=data.get("data_augment", False),
                 system_message=data.get("system_message"),
@@ -246,6 +253,7 @@ trainer = TrainerConfig(
                         else "state-ratio-clip-off"
                     ),
                     f"fw-layer-batch-{model_cfg.vision_config.fw_update_layer_group_size}",
+                    f"macro-{model_cfg.vision_config.macro_temporal_compression_mode}",
                     (
                         "fw-projector"
                         if train_projector

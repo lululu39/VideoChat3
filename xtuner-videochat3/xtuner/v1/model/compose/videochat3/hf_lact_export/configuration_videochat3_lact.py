@@ -24,6 +24,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         clip_state_grad_ratio: bool = True,
         fw_update_layer_group_size: int = 1,
         macro_temporal_compression_factor: int = 1,
+        macro_temporal_compression_mode: str = "auto",
         lact_inference_state_mode: str = "continuous",
         **kwargs: Any,
     ):
@@ -68,6 +69,17 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
                 "macro_temporal_compression_factor must be one of (1, 2, 4, 8), "
                 f"got {macro_temporal_compression_factor}"
             )
+        if macro_temporal_compression_mode not in (
+            "auto",
+            "mean",
+            "select_last",
+            "video_last",
+        ):
+            raise ValueError(
+                "macro_temporal_compression_mode must be one of "
+                "('auto', 'mean', 'select_last', 'video_last'), got "
+                f"{macro_temporal_compression_mode!r}"
+            )
         if lact_inference_state_mode not in ("continuous", "reset_state"):
             raise ValueError(
                 "lact_inference_state_mode must be 'continuous' or 'reset_state', "
@@ -87,6 +99,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         self.clip_state_grad_ratio = clip_state_grad_ratio
         self.fw_update_layer_group_size = fw_update_layer_group_size
         self.macro_temporal_compression_factor = macro_temporal_compression_factor
+        self.macro_temporal_compression_mode = macro_temporal_compression_mode
         self.lact_inference_state_mode = lact_inference_state_mode
 
 

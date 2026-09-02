@@ -47,7 +47,11 @@ from xtuner.v1.ops.others import Dropout
 from xtuner.v1.ops.act_fn import get_act_fn
 from xtuner.v1.utils import get_logger
 
-from .macro_temporal import compress_chunk_outputs, video_clip_counts
+from .macro_temporal import (
+    compress_chunk_outputs,
+    resolve_macro_temporal_compression_mode,
+    video_clip_counts,
+)
 
 DEVICE = get_device()
 DEVICE_MODULE = get_torch_device_module()
@@ -673,7 +677,10 @@ class VideoChat3VisionModel(BaseModel):
             chunk_outputs,
             per_video_clip_counts,
             self.config.macro_temporal_compression_factor,
-            mode="mean",
+            mode=resolve_macro_temporal_compression_mode(
+                self.config.macro_temporal_compression_mode,
+                default="mean",
+            ),
         )
 
     def to_hf_key_list(self, key: str) -> list[str]:

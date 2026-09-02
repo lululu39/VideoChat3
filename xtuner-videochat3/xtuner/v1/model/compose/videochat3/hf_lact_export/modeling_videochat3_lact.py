@@ -34,23 +34,44 @@ def _compress_chunk_outputs(
     chunk_outputs: list[torch.Tensor],
     video_clip_counts: list[int],
     factor: int,
+    mode: str = "auto",
 ) -> list[torch.Tensor]:
-    """Keep the last final-layer output in each per-video macro group."""
+    """Compress final-layer chunk outputs without crossing videos."""
     if factor not in (1, 2, 4, 8):
         raise ValueError(f"Unsupported macro temporal compression factor: {factor}")
+    if mode == "auto":
+        mode = "select_last"
+    if mode not in ("mean", "select_last", "video_last"):
+        raise ValueError(f"Unsupported macro temporal compression mode: {mode!r}")
     if sum(video_clip_counts) != len(chunk_outputs):
         raise ValueError(
             f"video_clip_counts={video_clip_counts} do not cover "
             f"{len(chunk_outputs)} outputs"
         )
-    if factor == 1:
+    if factor == 1 and mode != "video_last":
         return chunk_outputs
     compressed = []
     offset = 0
     for clip_count in video_clip_counts:
+        if clip_count <= 0:
+            raise ValueError(f"clip_count must be positive, got {clip_count}")
         video_outputs = chunk_outputs[offset : offset + clip_count]
+        if mode == "video_last":
+            compressed.append(video_outputs[-1])
+            offset += clip_count
+            continue
         for start in range(0, clip_count, factor):
-            compressed.append(video_outputs[min(start + factor, clip_count) - 1])
+            group = video_outputs[start : min(start + factor, clip_count)]
+            if mode == "select_last":
+                compressed.append(group[-1])
+                continue
+            reference_shape = group[0].shape
+            if any(item.shape != reference_shape for item in group[1:]):
+                raise ValueError(
+                    "Chunk output shapes must match within a video for temporal mean pooling: "
+                    f"{[tuple(item.shape) for item in group]}"
+                )
+            compressed.append(group[0] if len(group) == 1 else torch.stack(group).mean(dim=0))
         offset += clip_count
     return compressed
 
@@ -1108,6 +1129,7 @@ class VideoChat3LACTVisionModel(VideoChat3VisionPreTrainedModel):
             chunk_outputs,
             video_clip_counts,
             self.config.macro_temporal_compression_factor,
+            mode=getattr(self.config, "macro_temporal_compression_mode", "auto"),
         )
 
     def set_lact_inference_state_mode(self, mode: str) -> None:

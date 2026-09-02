@@ -31,6 +31,12 @@ class VideoChat3VisionConfig(BaseModel):
     temporal_patch_size: int = 1  # 从2改为1
     temporal_merge_size: int = 4  # 新增
     macro_temporal_compression_factor: Literal[1, 2, 4, 8] = 1
+    macro_temporal_compression_mode: Literal[
+        "auto",
+        "mean",
+        "select_last",
+        "video_last",
+    ] = "auto"
     init_pos_emb_height: int = 64  # 新增
     init_pos_emb_width: int = 64  # 新增
     in_channels: int = 3
@@ -40,9 +46,13 @@ class VideoChat3VisionConfig(BaseModel):
     attn_impl: Literal["flash_attention_2", "eager_attention"] = "eager_attention"
 
     def model_post_init(self, __context: Any) -> None: 
-        from .macro_temporal import validate_macro_temporal_compression_factor
+        from .macro_temporal import (
+            validate_macro_temporal_compression_factor,
+            validate_macro_temporal_compression_mode,
+        )
 
         validate_macro_temporal_compression_factor(self.macro_temporal_compression_factor)
+        validate_macro_temporal_compression_mode(self.macro_temporal_compression_mode)
         if not is_installed("flash-attn") and self.attn_impl == "flash_attention_2":
             logger.warning("flash-attn-2 is not installed, using `eager_attention` instead.")
             self.attn_impl = "eager_attention"
