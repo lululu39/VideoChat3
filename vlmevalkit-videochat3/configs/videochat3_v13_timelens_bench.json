@@ -1,0 +1,46 @@
+{
+  "model": {
+    "VideoChat3-4B-LACT-v13": {
+      "class": "VideoChat3",
+      "model_path": "/data/yibo/VideoChat3/xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s1k-lr2e5-nofwclip-v13/20260902025612/hf-114",
+      "use_custom_prompt": false,
+      "use_vllm": false,
+      "max_new_tokens": 64
+    }
+  },
+  "data": {
+    "TimeLens_Charades_v13_2fps_f448_224px": {
+      "class": "TimeLens_Charades",
+      "dataset": "TimeLens_Charades",
+      "fps": 2.0,
+      "frames_limit": 448,
+      "min_pixels": 784,
+      "max_pixels": 50176,
+      "total_pixels": 14680064,
+      "check_extracted_frames": true,
+      "reason": false
+    },
+    "TimeLens_ActivityNet_v13_2fps_f448_224px": {
+      "class": "TimeLens_ActivityNet",
+      "dataset": "TimeLens_ActivityNet",
+      "fps": 2.0,
+      "frames_limit": 448,
+      "min_pixels": 784,
+      "max_pixels": 50176,
+      "total_pixels": 14680064,
+      "check_extracted_frames": true,
+      "reason": false
+    },
+    "TimeLens_QVHighlights_v13_2fps_f448_224px": {
+      "class": "TimeLens_QVHighlights",
+      "dataset": "TimeLens_QVHighlights",
+      "fps": 2.0,
+      "frames_limit": 448,
+      "min_pixels": 784,
+      "max_pixels": 50176,
+      "total_pixels": 14680064,
+      "check_extracted_frames": true,
+      "reason": false
+    }
+  }
+}
