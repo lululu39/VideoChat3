@@ -450,6 +450,10 @@ v10 uses the same generation/scoring protocol as the fixed Base core suite. Nati
 
 Conclusion: untrained R4 mean compression costs `7.90/5.20/8.28` points on Video-MME Short/Long and MVBench, while the image-only MMBench control changes by `-0.62`. Training the complete ViT and projector on random-half TimeLens recovers none of these gaps: v10 is another `0.20/2.40/1.03/6.50` points below the untrained R4 model on Short/Long/MVBench/MMBench. This one-epoch large-effective-source-batch recipe should not be used as the R4 initialization for further experiments.
 
+### Base R4 Mean-Init TimeLens-Bench
+
+**Status:** Prepared. Evaluate `/mnt/localssd/VideoChat3/VideoChat3-4B-R4-mean-init` with the same official TimeLens-Bench revision and 2 FPS/448-frame/224px budget as v12. Config: `vlmevalkit-videochat3/configs/videochat3_base_r4_timelens_bench.json`; launcher: `scripts/eval_videochat3_base_r4_timelens_bench.sh`; artifact root: `/mnt/localssd/VideoChat3/eval/videochat3-base-r4-mean-init-timelens-bench`.
+
 ## v11 - LACT R4 Token Select, FW + Projector, TimeLens Random Half
 
 **Status:** Paused by user after step 15/455 to implement and benchmark chunk-level linear memory. The clean run used eager layer-major group 1, SwiGLU+Muon, exact/unclipped NS5 backward with local activation recomputation, and state-only recurrent clipping. No checkpoint exists because the first interval is step 100.

@@ -1,0 +1,46 @@
+{
+  "model": {
+    "VideoChat3-4B-Base-R4-mean-init": {
+      "class": "VideoChat3",
+      "model_path": "/mnt/localssd/VideoChat3/VideoChat3-4B-R4-mean-init",
+      "use_custom_prompt": false,
+      "use_vllm": false,
+      "max_new_tokens": 64
+    }
+  },
+  "data": {
+    "TimeLens_Charades_base_r4_2fps_f448_224px": {
+      "class": "TimeLens_Charades",
+      "dataset": "TimeLens_Charades",
+      "fps": 2.0,
+      "frames_limit": 448,
+      "min_pixels": 784,
+      "max_pixels": 50176,
+      "total_pixels": 14680064,
+      "check_extracted_frames": true,
+      "reason": false
+    },
+    "TimeLens_ActivityNet_base_r4_2fps_f448_224px": {
+      "class": "TimeLens_ActivityNet",
+      "dataset": "TimeLens_ActivityNet",
+      "fps": 2.0,
+      "frames_limit": 448,
+      "min_pixels": 784,
+      "max_pixels": 50176,
+      "total_pixels": 14680064,
+      "check_extracted_frames": true,
+      "reason": false
+    },
+    "TimeLens_QVHighlights_base_r4_2fps_f448_224px": {
+      "class": "TimeLens_QVHighlights",
+      "dataset": "TimeLens_QVHighlights",
+      "fps": 2.0,
+      "frames_limit": 448,
+      "min_pixels": 784,
+      "max_pixels": 50176,
+      "total_pixels": 14680064,
+      "check_extracted_frames": true,
+      "reason": false
+    }
+  }
+}
