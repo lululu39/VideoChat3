@@ -688,6 +688,30 @@ class FastWeightLinear(nn.Module):
         output = torch.einsum("blhd,bhde->blhe", query, state)
         return output.reshape(query.shape[0], query.shape[1], self.dim)
 
+    def apply_and_predict_projected(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        state: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Apply Q and K to the same state in one packed batched matmul."""
+        query_length = query.shape[1]
+        output = torch.einsum(
+            "blhd,bhde->blhe",
+            torch.cat((query, key), dim=1),
+            state,
+        )
+        memory_output, key_prediction = output.split(
+            (query_length, key.shape[1]),
+            dim=1,
+        )
+        memory_output = memory_output.reshape(
+            query.shape[0],
+            query_length,
+            self.dim,
+        )
+        return memory_output, key_prediction
+
     def project_output(self, output: torch.Tensor) -> torch.Tensor:
         output = self.output_norm(output)
         return self.output_proj(output)
@@ -712,13 +736,31 @@ class FastWeightLinear(nn.Module):
         state: torch.Tensor,
         muon_update_steps: int,
     ) -> torch.Tensor:
+        prediction = torch.einsum("blhd,bhde->blhe", key_heads, state)
+        return self.update_projected_from_prediction(
+            key_heads,
+            target,
+            learning_rates,
+            state,
+            prediction,
+            muon_update_steps,
+        )
+
+    def update_projected_from_prediction(
+        self,
+        key_heads: torch.Tensor,
+        target: torch.Tensor,
+        learning_rates: torch.Tensor,
+        state: torch.Tensor,
+        prediction: torch.Tensor,
+        muon_update_steps: int,
+    ) -> torch.Tensor:
         target_heads = target.reshape(
             target.shape[0],
             target.shape[1],
             self.num_heads,
             self.head_dim,
         ).to(state.dtype)
-        prediction = torch.einsum("blhd,bhde->blhe", key_heads, state)
         error = target_heads - prediction
         weighted_error = error * learning_rates.to(error.dtype).unsqueeze(-1)
         state_gradient = torch.einsum(
@@ -1128,14 +1170,12 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                     self.beta_proj.weight.float(),
                 )
                 + self.base_lr_inverse
-            )
+            ).to(packed_key.dtype)
 
-        outputs = []
+        packed_memory_outputs = []
         for clip_count in video_clip_counts:
             if clip_count <= 0:
                 raise ValueError(f"clip_count must be positive, got {clip_count}")
-            video_start = clip_slices[clip_index][0]
-            video_memory_outputs = []
             state = self.init_linear_state(batch_size=1)
             for video_clip_index in range(clip_count):
                 will_update = video_clip_index + 1 < clip_count
@@ -1150,16 +1190,21 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                     group_state = state
 
                 start, end = clip_slices[clip_index]
-                memory_output = self.memory.apply_projected(
-                    packed_query[:, start:end],
-                    group_state,
-                )
                 if will_update:
-                    state = self.memory.update_projected(
-                        packed_key[:, start:end].to(group_state.dtype),
+                    clip_key = packed_key[:, start:end].to(group_state.dtype)
+                    memory_output, key_prediction = (
+                        self.memory.apply_and_predict_projected(
+                            packed_query[:, start:end],
+                            clip_key,
+                            group_state,
+                        )
+                    )
+                    state = self.memory.update_projected_from_prediction(
+                        clip_key,
                         packed_target[:, start:end],
                         packed_learning_rates[:, start:end],
                         group_state,
+                        key_prediction,
                         self.muon_update_steps,
                     )
                     if state_ratio_context is not None:
@@ -1167,17 +1212,17 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                             state,
                             state_ratio_context,
                         )
-                video_memory_outputs.append(memory_output)
+                else:
+                    memory_output = self.memory.apply_projected(
+                        packed_query[:, start:end],
+                        group_state,
+                    )
+                packed_memory_outputs.append(memory_output)
                 clip_index += 1
-            video_end = clip_slices[clip_index - 1][1]
-            memory_output = self.memory.project_output(
-                torch.cat(video_memory_outputs, dim=1)
-            ).squeeze(0)
-            outputs.append(
-                hidden_states[video_start:video_end]
-                + memory_output * self.memory_gate
-            )
-        return torch.cat(outputs, dim=0)
+        memory_output = torch.cat(packed_memory_outputs, dim=1)
+        del packed_memory_outputs
+        memory_output = self.memory.project_output(memory_output).squeeze(0)
+        return hidden_states + memory_output * self.memory_gate
 
     def forward_memory_scan(
         self,
