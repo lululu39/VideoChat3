@@ -641,7 +641,7 @@ Conclusion: one final chunk is insufficient for temporal grounding even after Vi
 
 ## v16 - Linear16 + Delta 3D RoPE Last-Chunk Token Select, TimeLens Random Half
 
-**Status:** Stopped by the user during the first optimizer batch, before any step metric, checkpoint, or resume state was written. The public W&B run initialized successfully and remains incomplete.
+**Status:** Active on eight H100s with `lact_gate="tanh"`; the fresh public W&B run is online and the first optimizer batch is loading/processing. No step metric or checkpoint exists yet.
 
 - Objective: repeat v13 exactly while enabling 3D RoPE only on LaCT fast Q/K, testing whether explicit per-video global temporal and spatial patch positions improve information retained in the final recurrent chunk.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; same Base-exact Linear16 attention-share-init as v13, with zero initial linear state and zero memory gates.
@@ -656,3 +656,5 @@ Conclusion: one final chunk is insufficient for temporal grounding even after Vi
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-3drope-tanh-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s1k-lr2e5-nofwclip-v16/<timestamp>/hf-114`.
 
 Startup validation: all eight ranks confirmed `lact_3d_rope=1`, Linear16+Delta, `video_last`, 1K packing, 1,815 packs / 114 expected steps, and the intended `143.9M` Linear-FW plus `33.0M` projector trainable scope with ViT/LM frozen. Public W&B authenticated as `yibozhong657 (LVSM-Experiment)`. The first batch reached full GPU compute with a maximum observed device use of about `77.74 GB` and no model/runtime error before the user stopped it; no optimizer step completed. The initial launch failed before training because its 68-character W&B tag exceeded the 64-character limit; commit `1b75e61` shortened only that tag and the successful restart kept the same run ID.
+
+The tanh-gate restart uses fresh run ID `vc3-4b-lact-linear16-delta-3drope-tanh-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s1k-lr2e5-nofwclip-v16` because W&B would not reuse the deleted prior ID. All ranks explicitly report `VIDEOCHAT3_LACT_GATE=tanh` and `VIDEOCHAT3_LACT_3D_ROPE=1`; run directory `20260903155802`, native log `torchrun_logs/training_20260903_155745_datava270000004.log`.
