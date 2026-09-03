@@ -37,6 +37,7 @@ def _tiny_model_config():
         init_pos_emb_width=2,
         attn_impl="eager_attention",
         fw_muon_update_steps=0,
+        lact_3d_rope=True,
     )
     text_config = Qwen3Dense4BConfig(
         vocab_size=128,
@@ -190,6 +191,7 @@ def test_hf_interval_save_loads_independent_lact_model(tmp_path):
     assert saved_config["vision_config"]["clip_ns_grad_ratio"] is False
     assert saved_config["vision_config"]["clip_state_grad_ratio"] is True
     assert saved_config["vision_config"]["macro_temporal_compression_mode"] == "auto"
+    assert saved_config["vision_config"]["lact_3d_rope"] is True
     assert saved_config["architectures"] == ["VideoChat3LACTForConditionalGeneration"]
     assert saved_config["auto_map"]["AutoModelForCausalLM"] == (
         "modeling_videochat3_lact.VideoChat3LACTForConditionalGeneration"
@@ -204,6 +206,7 @@ def test_hf_interval_save_loads_independent_lact_model(tmp_path):
     assert hf_config.vision_config.clip_ns_grad_ratio is False
     assert hf_config.vision_config.clip_state_grad_ratio is True
     assert hf_config.vision_config.macro_temporal_compression_mode == "auto"
+    assert hf_config.vision_config.lact_3d_rope is True
     hf_model, loading_info = AutoModelForCausalLM.from_pretrained(
         save_path,
         trust_remote_code=True,

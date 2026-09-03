@@ -14,6 +14,7 @@ from .modeling_vision import (
     VideoChat3VisionLayer,
     VideoChat3VisionModel,
     VideoChat3VisionPatchEmbed,
+    apply_rope,
     patch_merger,
 )
 from .macro_temporal import (
@@ -27,6 +28,76 @@ _NS_GRAD_RATIO_RHO = 1.0
 _NS_GRAD_RATIO_EPS = 1e-12
 _STATE_GRAD_RATIO_RHO = 1.0
 _STATE_GRAD_RATIO_EPS = 1e-12
+
+
+def build_lact_3d_rope_freqs(
+    grid_thws: torch.Tensor,
+    video_clip_counts: list[int],
+    head_dim: int,
+    theta: float = 10000.0,
+) -> torch.Tensor:
+    """Build packed T/H/W RoPE frequencies with video-global frame indices."""
+    if head_dim % 2:
+        raise ValueError(f"LACT 3D RoPE requires an even head_dim, got {head_dim}")
+    if sum(video_clip_counts) != len(grid_thws):
+        raise ValueError(
+            f"video_clip_counts={video_clip_counts} do not cover "
+            f"{len(grid_thws)} clips"
+        )
+
+    complex_dim = head_dim // 2
+    spatial_dim = complex_dim // 3
+    axis_dims = (complex_dim - 2 * spatial_dim, spatial_dim, spatial_dim)
+    max_position = max(
+        max(sum(int(grid_thws[index + offset, 0]) for offset in range(count))
+            for index, count in _video_clip_offsets(video_clip_counts)),
+        int(grid_thws[:, 1:].max().item()),
+    )
+    positions = torch.arange(max_position, device=grid_thws.device)
+    inv_freq = 1.0 / torch.pow(
+        torch.tensor(theta, device=grid_thws.device, dtype=torch.float32),
+        torch.arange(0, head_dim, 2, device=grid_thws.device, dtype=torch.float32)
+        / head_dim,
+    )
+    freq_table = torch.polar(
+        torch.ones(max_position, complex_dim, device=grid_thws.device),
+        torch.outer(positions.float(), inv_freq),
+    )
+    time_freqs, height_freqs, width_freqs = freq_table.split(axis_dims, dim=1)
+
+    packed_freqs = []
+    clip_index = 0
+    for clip_count in video_clip_counts:
+        frame_offset = 0
+        for _ in range(clip_count):
+            time, height, width = map(int, grid_thws[clip_index].tolist())
+            chunk_freqs = torch.cat(
+                (
+                    time_freqs[frame_offset : frame_offset + time]
+                    .view(time, 1, 1, -1)
+                    .expand(time, height, width, -1),
+                    height_freqs[:height]
+                    .view(1, height, 1, -1)
+                    .expand(time, height, width, -1),
+                    width_freqs[:width]
+                    .view(1, 1, width, -1)
+                    .expand(time, height, width, -1),
+                ),
+                dim=-1,
+            )
+            packed_freqs.append(chunk_freqs.reshape(time * height * width, complex_dim))
+            frame_offset += time
+            clip_index += 1
+    return torch.cat(packed_freqs, dim=0)
+
+
+def _video_clip_offsets(video_clip_counts: list[int]):
+    offset = 0
+    for count in video_clip_counts:
+        if count <= 0:
+            raise ValueError(f"clip_count must be positive, got {count}")
+        yield offset, count
+        offset += count
 
 
 def inverse_softplus(value: float) -> float:
@@ -372,6 +443,19 @@ class FastWeightSwiGLU(nn.Module):
     def forward(self, x: torch.Tensor, fast_weights):
         if self.apply_proj is not None:
             x = self.apply_norm(self.apply_proj(x))
+        return self.forward_preprojected(x, fast_weights)
+
+    def project_query(self, x: torch.Tensor) -> torch.Tensor:
+        if self.apply_proj is None:
+            return x
+        return self.apply_norm(self.apply_proj(x))
+
+    def project_key(self, x: torch.Tensor) -> torch.Tensor:
+        if self.update_proj is None:
+            return x
+        return self.apply_norm(self.update_proj(x))
+
+    def forward_preprojected(self, x: torch.Tensor, fast_weights):
         output, _, _, _, _ = self._apply_fast_weights(x, fast_weights)
         output = self.output_norm(output)
         if self.output_proj is not None:
@@ -571,8 +655,17 @@ class FastWeightLinear(nn.Module):
         x: torch.Tensor,
         projection: nn.Sequential,
     ) -> torch.Tensor:
-        batch_size, seq_len, _ = x.shape
-        projected = self.apply_norm(projection(x))
+        return self.reshape_projected(self.project_flat(x, projection))
+
+    def project_flat(
+        self,
+        x: torch.Tensor,
+        projection: nn.Sequential,
+    ) -> torch.Tensor:
+        return self.apply_norm(projection(x))
+
+    def reshape_projected(self, projected: torch.Tensor) -> torch.Tensor:
+        batch_size, seq_len, _ = projected.shape
         projected = projected.reshape(
             batch_size,
             seq_len,
@@ -601,6 +694,14 @@ class FastWeightLinear(nn.Module):
 
     def forward(self, x: torch.Tensor, state: torch.Tensor) -> torch.Tensor:
         query = self.project_query(x)
+        return self.project_output(self.apply_projected(query, state))
+
+    def forward_preprojected(
+        self,
+        query: torch.Tensor,
+        state: torch.Tensor,
+    ) -> torch.Tensor:
+        query = self.reshape_projected(query)
         return self.project_output(self.apply_projected(query, state))
 
     def update_projected(
@@ -679,6 +780,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         recompute_ns5_backward: bool = True,
         clip_state_grad_ratio: bool = True,
         lact_inference_state_mode: str = "continuous",
+        lact_3d_rope: bool = False,
     ):
         super().__init__(
             num_heads=num_heads,
@@ -702,6 +804,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         self.fw_share_proj = fw_share_proj
         self.fw_share_init = fw_share_init
         self.clip_state_grad_ratio = clip_state_grad_ratio
+        self.lact_3d_rope = lact_3d_rope
         if lact_inference_state_mode not in ("continuous", "reset_state"):
             raise ValueError(
                 "lact_inference_state_mode must be 'continuous' or 'reset_state', "
@@ -778,6 +881,29 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         key = self.memory.apply_norm(F.silu(key))
         return query, key, value.contiguous()
 
+    def _apply_lact_3d_rope(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        rope_freqs_cis: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        shape = query.shape[:-1] + (
+            self.num_heads,
+            self.hidden_size_per_attention_head,
+        )
+        if query.ndim == 3:
+            rope_freqs_cis = rope_freqs_cis.unsqueeze(0).expand(
+                query.shape[0],
+                -1,
+                -1,
+            )
+        query, key = apply_rope(
+            query.reshape(shape),
+            key.reshape(shape),
+            rope_freqs_cis,
+        )
+        return query.flatten(-2), key.flatten(-2)
+
     def forward_attention(
         self,
         hidden_states: torch.Tensor,
@@ -793,13 +919,47 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         self,
         hidden_states: torch.Tensor,
         fast_weights,
+        lact_rope_freqs_cis: torch.Tensor | None = None,
     ):
         memory_input = self.memory_norm(hidden_states)
+        if self.lact_3d_rope:
+            if lact_rope_freqs_cis is None:
+                raise ValueError("LACT 3D RoPE frequencies are required when enabled")
+            prediction_input = F.rms_norm(
+                memory_input,
+                normalized_shape=(memory_input.shape[-1],),
+                eps=1e-5,
+            )
+            if self.fw_share_proj:
+                query, key, target = self._shared_qkv(memory_input)
+            elif self.memory_type == "linear":
+                query = self.memory.project_flat(
+                    memory_input,
+                    self.memory.apply_proj,
+                )
+                key = self.memory.project_flat(
+                    memory_input,
+                    self.memory.update_proj,
+                )
+                target = self.value_proj(prediction_input)
+            else:
+                query = self.memory.project_query(memory_input)
+                key = self.memory.project_key(memory_input)
+                target = self.value_proj(prediction_input)
+            query, key = self._apply_lact_3d_rope(
+                query,
+                key,
+                lact_rope_freqs_cis,
+            )
+            memory_output = self.memory.forward_preprojected(query, fast_weights)
+            if self.fw_share_proj:
+                memory_output = self.wo(memory_output)
         if self.fw_share_proj:
-            query, key, target = self._shared_qkv(memory_input)
-            memory_output = self.memory(query, fast_weights)
-            memory_output = self.wo(memory_output)
-        else:
+            if not self.lact_3d_rope:
+                query, key, target = self._shared_qkv(memory_input)
+                memory_output = self.memory(query, fast_weights)
+                memory_output = self.wo(memory_output)
+        elif not self.lact_3d_rope:
             key = target = memory_input
             memory_output = self.memory(memory_input, fast_weights)
         hidden_states = hidden_states + memory_output * self.memory_gate
@@ -820,15 +980,23 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             normalized_shape=(memory_input.shape[-1],),
             eps=1e-5,
         )
-        update_input = key
-        if not self.fw_share_proj:
+        if self.lact_3d_rope:
+            update_input = key
+        elif not self.fw_share_proj:
             update_input = memory_input
             target = self.value_proj(prediction_input)
+        else:
+            update_input = key
         with torch.autocast(device_type=memory_input.device.type, enabled=False):
             learning_rates = F.softplus(
                 F.linear(prediction_input.float(), self.lr_proj.weight.float()) + self.base_lr_inverse
             )
-        return self.memory.update(
+        update_fn = (
+            self.memory.update_preprojected
+            if self.lact_3d_rope
+            else self.memory.update
+        )
+        return update_fn(
             update_input,
             target,
             learning_rates,
@@ -866,12 +1034,21 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             self.muon_update_steps,
         )
 
-    def apply_memory_chunk(self, hidden_states: torch.Tensor, fast_weights):
+    def apply_memory_chunk(
+        self,
+        hidden_states: torch.Tensor,
+        fast_weights,
+        lact_rope_freqs_cis: torch.Tensor | None = None,
+    ):
         # Keep the recurrent training path eager. Compiling this per-chunk
         # subgraph inside whole-layer activation checkpointing retains large
         # AOTAutograd buffers across the long scan under FSDP without a
         # measurable step-time gain.
-        return self.apply_memory(hidden_states, fast_weights)
+        return self.apply_memory(
+            hidden_states,
+            fast_weights,
+            lact_rope_freqs_cis,
+        )
 
     def update_fast_weights_chunk(
         self,
@@ -897,6 +1074,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         hidden_states: torch.Tensor,
         clip_slices: list[tuple[int, int]],
         video_clip_counts: list[int],
+        lact_rope_freqs_cis: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if sum(video_clip_counts) != len(clip_slices):
             raise ValueError(
@@ -916,8 +1094,27 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         # over the complete layer input preserves the recurrent state order
         # while avoiding batch-size-one projection calls for every chunk.
         packed_memory_input = self.memory_norm(hidden_states.unsqueeze(0))
-        packed_query = self.memory.project_query(packed_memory_input)
-        packed_key = self.memory.project_key(packed_memory_input)
+        if self.lact_3d_rope:
+            if lact_rope_freqs_cis is None:
+                raise ValueError("LACT 3D RoPE frequencies are required when enabled")
+            packed_query = self.memory.project_flat(
+                packed_memory_input,
+                self.memory.apply_proj,
+            )
+            packed_key = self.memory.project_flat(
+                packed_memory_input,
+                self.memory.update_proj,
+            )
+            packed_query, packed_key = self._apply_lact_3d_rope(
+                packed_query,
+                packed_key,
+                lact_rope_freqs_cis,
+            )
+            packed_query = self.memory.reshape_projected(packed_query)
+            packed_key = self.memory.reshape_projected(packed_key)
+        else:
+            packed_query = self.memory.project_query(packed_memory_input)
+            packed_key = self.memory.project_key(packed_memory_input)
         prediction_input = F.rms_norm(
             packed_memory_input,
             normalized_shape=(packed_memory_input.shape[-1],),
@@ -987,12 +1184,14 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         hidden_states: torch.Tensor,
         clip_slices: list[tuple[int, int]],
         video_clip_counts: list[int],
+        lact_rope_freqs_cis: torch.Tensor | None = None,
     ) -> torch.Tensor:
         if self.memory_type == "linear":
             return self._forward_linear_memory_scan(
                 hidden_states,
                 clip_slices,
                 video_clip_counts,
+                lact_rope_freqs_cis,
             )
         if self.lact_inference_state_mode == "reset_state":
             if self.training:
@@ -1007,6 +1206,11 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                     clip_hidden, _, _, _ = self.apply_memory_chunk(
                         clip_hidden,
                         fast_weights,
+                        (
+                            None
+                            if lact_rope_freqs_cis is None
+                            else lact_rope_freqs_cis[start:end]
+                        ),
                     )
                     outputs.append(clip_hidden.squeeze(0))
                     clip_index += 1
@@ -1040,6 +1244,11 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                 clip_hidden, memory_input, key, target = self.apply_memory_chunk(
                     clip_hidden,
                     group_fast_weights,
+                    (
+                        None
+                        if lact_rope_freqs_cis is None
+                        else lact_rope_freqs_cis[start:end]
+                    ),
                 )
                 if will_update:
                     fast_weights, master_weights = self.update_fast_weights_chunk(
@@ -1068,6 +1277,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         hidden_states: torch.Tensor,
         cu_seqlens: torch.Tensor,
         rope_freqs_cis: torch.Tensor,
+        lact_rope_freqs_cis: torch.Tensor | None,
         fast_w0: torch.Tensor,
         fast_w1: torch.Tensor,
         fast_w2: torch.Tensor,
@@ -1081,6 +1291,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         hidden_states, memory_input, key, target = self.apply_memory_chunk(
             hidden_states.unsqueeze(0),
             (fast_w0, fast_w1, fast_w2),
+            lact_rope_freqs_cis,
         )
         hidden_states = hidden_states.squeeze(0)
         residual = hidden_states
@@ -1093,9 +1304,16 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         hidden_states: torch.Tensor,
         cu_seqlens: torch.Tensor,
         rope_freqs_cis: torch.Tensor,
+        lact_rope_freqs_cis: torch.Tensor | None,
         fast_weights,
     ):
-        args = (hidden_states, cu_seqlens, rope_freqs_cis, *fast_weights)
+        args = (
+            hidden_states,
+            cu_seqlens,
+            rope_freqs_cis,
+            lact_rope_freqs_cis,
+            *fast_weights,
+        )
         # Compiling FlashAttention together with the large slow MLP regresses
         # the real 1152-wide model.
         return self._forward_chunk(*args)
@@ -1105,6 +1323,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         hidden_states: torch.Tensor,
         cu_seqlens: torch.Tensor,
         rope_freqs_cis: torch.Tensor,
+        lact_rope_freqs_cis: torch.Tensor | None = None,
         clip_slices: list[tuple[int, int]] | None = None,
         video_clip_counts: list[int] | None = None,
         chunk_fast_weights: tuple[
@@ -1119,12 +1338,18 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                 hidden_states,
                 cu_seqlens,
                 rope_freqs_cis,
+                lact_rope_freqs_cis,
                 chunk_fast_weights,
             )
         if clip_slices is None or video_clip_counts is None:
             raise ValueError("Full LACT layer forward requires clip layout")
         hidden_states = self.forward_attention(hidden_states, cu_seqlens, rope_freqs_cis)
-        hidden_states = self.forward_memory_scan(hidden_states, clip_slices, video_clip_counts)
+        hidden_states = self.forward_memory_scan(
+            hidden_states,
+            clip_slices,
+            video_clip_counts,
+            lact_rope_freqs_cis,
+        )
         residual = hidden_states
         hidden_states = self.mlp(self.norm1(hidden_states))
         return residual + hidden_states
@@ -1137,6 +1362,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         num_layers: int,
         block_cfg: dict,
         fw_update_layer_group_size: int = 1,
+        lact_3d_rope: bool = False,
     ):
         super().__init__()
         from .modeling_vision import Rope2DPosEmb
@@ -1144,6 +1370,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         self.rope_2d = Rope2DPosEmb(block_cfg["hidden_dim"] // block_cfg["num_heads"], 512, 512)
         self.blocks = nn.ModuleList([VideoChat3LACTVisionLayer(**block_cfg) for _ in range(num_layers)])
         self.final_layernorm = nn.LayerNorm(hidden_dim)
+        self.lact_3d_rope = lact_3d_rope
         self.fw_update_layer_group_size = int(fw_update_layer_group_size)
         if self.fw_update_layer_group_size <= 0:
             raise ValueError("fw_update_layer_group_size must be positive")
@@ -1171,6 +1398,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         value_weights,
         base_lr_inverse: float,
         share_proj: bool,
+        lact_3d_rope: bool,
         muon_update_steps: int,
     ):
         num_layers, batch_size, seq_len, hidden_dim = memory_inputs.shape
@@ -1179,7 +1407,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
             normalized_shape=(hidden_dim,),
             eps=1e-5,
         )
-        if share_proj:
+        if share_proj or lact_3d_rope:
             update_inputs = keys
             update_targets = targets
         else:
@@ -1255,7 +1483,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
     ):
         memory_inputs = torch.stack([record[0] for record in update_records])
         share_proj = layers[0].fw_share_proj
-        if share_proj:
+        if share_proj or layers[0].lact_3d_rope:
             keys = torch.stack([record[1] for record in update_records])
             targets = torch.stack([record[2] for record in update_records])
         else:
@@ -1274,6 +1502,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
             value_weights,
             layers[0].base_lr_inverse,
             share_proj,
+            layers[0].lact_3d_rope,
             layers[0].muon_update_steps,
         )
         full_group = len(layers) == self.fw_update_layer_group_size
@@ -1311,6 +1540,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         self,
         hidden_states: torch.Tensor,
         rope_freqs_cis: torch.Tensor,
+        lact_rope_freqs_cis: torch.Tensor | None,
         clip_slices: list[tuple[int, int]],
         video_clip_counts: list[int],
     ) -> torch.Tensor:
@@ -1367,6 +1597,11 @@ class VideoChat3LACTVisionEncoder(nn.Module):
                     start, end = clip_slices[clip_index]
                     chunk_hidden = hidden_states[start:end]
                     chunk_rope = rope_freqs_cis[start:end]
+                    chunk_lact_rope = (
+                        None
+                        if lact_rope_freqs_cis is None
+                        else lact_rope_freqs_cis[start:end]
+                    )
                     update_records = []
                     ratio_contexts = []
                     apply_fast_weights = []
@@ -1397,6 +1632,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
                             chunk_hidden,
                             clip_cu_seqlens[clip_index],
                             chunk_rope,
+                            chunk_lact_rope,
                             chunk_fast_weights=fast_weights,
                         )
                         update_records.append((memory_input, key, target))
@@ -1456,6 +1692,13 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         video_clip_counts: list[int],
     ) -> torch.Tensor:
         rope_freqs_cis = self.rope_2d.get_freqs_cis(grid_thws=grid_thws)
+        lact_rope_freqs_cis = None
+        if self.lact_3d_rope:
+            lact_rope_freqs_cis = build_lact_3d_rope_freqs(
+                grid_thws,
+                video_clip_counts,
+                self.blocks[0].hidden_size_per_attention_head,
+            )
         lengths = (grid_thws[:, 0] * grid_thws[:, 1] * grid_thws[:, 2]).tolist()
         offsets = [0]
         for length in lengths:
@@ -1471,6 +1714,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
                     hidden_states,
                     cu_seqlens,
                     rope_freqs_cis,
+                    lact_rope_freqs_cis,
                     clip_slices,
                     video_clip_counts,
                 )
@@ -1478,6 +1722,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
             hidden_states = self._forward_cross_layer_groups(
                 hidden_states,
                 rope_freqs_cis,
+                lact_rope_freqs_cis,
                 clip_slices,
                 video_clip_counts,
             )
@@ -1501,6 +1746,7 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
             hidden_dim=config.hidden_size,
             num_layers=config.num_hidden_layers,
             fw_update_layer_group_size=config.fw_update_layer_group_size,
+            lact_3d_rope=config.lact_3d_rope,
             block_cfg={
                 "num_heads": config.num_attention_heads,
                 "hidden_dim": config.hidden_size,
@@ -1521,6 +1767,7 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
                 "recompute_ns5_backward": config.recompute_ns5_backward,
                 "clip_state_grad_ratio": config.clip_state_grad_ratio,
                 "lact_inference_state_mode": config.lact_inference_state_mode,
+                "lact_3d_rope": config.lact_3d_rope,
             },
         )
         self._hf_prefix = "model.vision_tower."

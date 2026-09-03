@@ -79,6 +79,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
     clip_state_grad_ratio: bool = True
     fw_update_layer_group_size: int = 1
     lact_inference_state_mode: Literal["continuous", "reset_state"] = "continuous"
+    lact_3d_rope: bool = False
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(__context)

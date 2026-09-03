@@ -10,6 +10,7 @@ from xtuner.v1.model.compose.videochat3.modeling_vision_lact import (
     _BoundPreviousStateGradient,
     _CaptureNextStateGradient,
     _StateGradRatioContext,
+    build_lact_3d_rope_freqs,
     zeropower_via_newtonschulz5,
 )
 from xtuner.v1.model.compose.videochat3.videochat3_config import (
@@ -365,6 +366,67 @@ def test_fused_fast_weight_update_matches_reference_formula():
             torch.testing.assert_close(actual_weight, expected_weight, rtol=0, atol=0)
 
 
+def test_lact_3d_rope_uses_global_frame_positions_and_resets_between_videos():
+    grid_thws = torch.tensor(
+        [[2, 2, 2], [1, 2, 2], [2, 1, 2]],
+        dtype=torch.int32,
+    )
+    freqs = build_lact_3d_rope_freqs(
+        grid_thws,
+        video_clip_counts=[2, 1],
+        head_dim=12,
+    )
+    inv_freq = 1.0 / torch.pow(
+        torch.tensor(10000.0),
+        torch.arange(0, 12, 2).float() / 12,
+    )
+
+    # The second chunk of video 1 starts at global frame 2, not frame 0.
+    expected_second_chunk = torch.polar(
+        torch.ones(2),
+        2 * inv_freq[:2],
+    )
+    torch.testing.assert_close(freqs[8, :2], expected_second_chunk)
+    assert not torch.equal(freqs[8, :2], freqs[0, :2])
+
+    # A new video resets T while H/W remain the current patch coordinates.
+    torch.testing.assert_close(freqs[12], torch.ones_like(freqs[12]))
+    torch.testing.assert_close(freqs[1, 4:], freqs[5, 4:])
+    assert not torch.equal(freqs[0, 4:], freqs[1, 4:])
+
+
+def test_lact_3d_rope_changes_fast_memory_without_changing_chunk_compression():
+    torch.manual_seed(19)
+    without_rope = VideoChat3LACTVisionConfig(
+        **_vision_kwargs(),
+        memory_type="linear",
+        inner_optim="delta",
+        fw_num_heads=4,
+        lact_3d_rope=False,
+    ).build()
+    with_rope = VideoChat3LACTVisionConfig(
+        **_vision_kwargs(),
+        memory_type="linear",
+        inner_optim="delta",
+        fw_num_heads=4,
+        lact_3d_rope=True,
+    ).build()
+    with_rope.load_state_dict(without_rope.state_dict())
+    with torch.no_grad():
+        for model in (without_rope, with_rope):
+            for block in model.encoder.blocks:
+                block.memory_gate.fill_(0.1)
+
+    pixel_values = torch.randn(32, 12)
+    grid_thws = torch.tensor([[8, 2, 2]], dtype=torch.int32)
+    without_outputs = without_rope(pixel_values, grid_thws)
+    with_outputs = with_rope(pixel_values, grid_thws)
+
+    assert len(with_outputs) == len(without_outputs) == 2
+    assert all(left.shape == right.shape for left, right in zip(with_outputs, without_outputs))
+    assert not torch.allclose(with_outputs[1], without_outputs[1])
+
+
 def test_zero_memory_gate_preserves_baseline_and_receives_gradient():
     torch.manual_seed(7)
     baseline = VideoChat3VisionConfig(**_vision_kwargs()).build()
@@ -471,6 +533,7 @@ def test_lact_config_builds_separate_vision_model():
     assert isinstance(model, VideoChat3VisionLACTModel)
     assert config.clip_ns_grad_ratio is False
     assert config.clip_state_grad_ratio is True
+    assert config.lact_3d_rope is False
     assert all(block.memory.clip_ns_grad_ratio is False for block in model.encoder.blocks)
     assert all(block.clip_state_grad_ratio is True for block in model.encoder.blocks)
     assert all(block.memory_gate.shape == (16,) for block in model.encoder.blocks)
