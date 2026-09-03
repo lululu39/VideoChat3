@@ -661,7 +661,7 @@ The tanh-gate restart uses fresh run ID `vc3-4b-lact-linear16-delta-3drope-tanh-
 
 ## v17 - Linear16 + Delta 3D RoPE, Linear Gate 0.5, Last-Chunk Token Select
 
-**Status:** Prepared for a clean start after v16 was stopped at step 25/114; no v16 checkpoint is reused.
+**Status:** Active on eight H100s from a clean initialization after v16 stopped; no v16 checkpoint is reused.
 
 - Objective: repeat v16 while removing the near-zero gate bottleneck, testing 3D-RoPE Linear memory with a strong residual from the first batch.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; Linear16 private Q/K/V/O retains deterministic attention share-init, linear state starts at zero per video/layer, and every memory-gate element is deterministically reset to `0.5`.
@@ -674,3 +674,5 @@ The tanh-gate restart uses fresh run ID `vc3-4b-lact-linear16-delta-3drope-tanh-
 - Training W&B: [`v17`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-gate0p5-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v17).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_GATE05_LASTCHUNK_FWProj_train_timelens_v17.sh`.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-gate0p5-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v17/<timestamp>/hf-114`.
+
+Startup validation: all ranks report Linear16+Delta, `lact_3d_rope=1`, `lact_gate=linear`, `lact_gate_init=0.5`, `video_last`, 1,815 packs / 114 steps, and the intended `143.9M` Linear-FW plus `33.0M` projector scope with ViT/LM frozen. Step 1 completes with global CE `0.821944`, finite pre-clip norm `2.6031`, zero warmup LR, and maximum rank allocation `69.58 GB`; no OOM, invalid norm, or skipped update occurs. This differs immediately from the identical v13/v16 step-1 CE/norm of `0.800191/1.3236`, confirming that the 0.5 linear gate activates the FW/3D-RoPE branch at initialization. Active run directory `20260903173458`; native log `torchrun_logs/training_20260903_173441_datava270000004.log`.
