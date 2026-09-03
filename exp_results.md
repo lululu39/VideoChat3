@@ -679,7 +679,7 @@ Startup validation: all ranks report Linear16+Delta, `lact_3d_rope=1`, `lact_gat
 
 ## v18 - Linear16 + Delta, No 3D RoPE, Linear Gate 0.5, Last-Chunk Token Select
 
-**Status:** Launching on eight H100s from a clean initialization; no v17 checkpoint is reused.
+**Status:** Active on eight H100s from a clean initialization; no v17 checkpoint is reused.
 
 - Objective: isolate the effect of 3D RoPE by repeating v17 with `lact_3d_rope=False` as the only model/training change.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; Linear16 private Q/K/V/O retains deterministic attention share-init, linear state starts at zero per video/layer, and every memory-gate element is deterministically reset to `0.5`.
@@ -692,3 +692,5 @@ Startup validation: all ranks report Linear16+Delta, `lact_3d_rope=1`, `lact_gat
 - Training W&B: [`v18`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-no3drope-gate0p5-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v18).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_NO3DROPE_GATE05_LASTCHUNK_FWProj_train_timelens_v18.sh`.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-no3drope-gate0p5-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v18/<timestamp>/hf-114`.
+
+Startup validation: public W&B authenticated as `yibozhong657 (LVSM-Experiment)` and all ranks use the v17 recipe with the launcher-pinned `VIDEOCHAT3_LACT_3D_ROPE=0`. The cache contains the expected 1,815 packs / 114 steps, and FSDP reports `143.9M` Linear-FW plus `33.0M` projector parameters trainable with ViT/LM frozen. Step 1 completes with global CE `0.81602192`, finite pre-clip norm `2.23620701`, zero warmup LR, and maximum rank allocation `69.47 GB`; there is no OOM, invalid norm, or skipped update. The corresponding v17 3D-RoPE step-1 CE/norm was `0.821944/2.6031`, so disabling 3D RoPE measurably changes the active gate-0.5 FW branch without changing the batch or optimizer. Active run directory `20260903180830`; native log `torchrun_logs/training_20260903_180813_datava270000001.log`.
