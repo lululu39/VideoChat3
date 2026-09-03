@@ -641,7 +641,7 @@ Conclusion: one final chunk is insufficient for temporal grounding even after Vi
 
 ## v16 - Linear16 + Delta 3D RoPE Last-Chunk Token Select, TimeLens Random Half
 
-**Status:** Prepared but stopped before launch at the user's request because all eight H100s are occupied by another workload. No v16 process, W&B run, checkpoint, or resume state exists.
+**Status:** Prepared; launch pending exclusive access to all eight H100s.
 
 - Objective: repeat v13 exactly while enabling 3D RoPE only on LaCT fast Q/K, testing whether explicit per-video global temporal and spatial patch positions improve information retained in the final recurrent chunk.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; same Base-exact Linear16 attention-share-init as v13, with zero initial linear state and zero memory gates.
@@ -654,5 +654,3 @@ Conclusion: one final chunk is insufficient for temporal grounding even after Vi
 - Training W&B: [`v16`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-delta-3drope-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s1k-lr2e5-nofwclip-v16).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_LASTCHUNK_FWProj_train_timelens_v16.sh`.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-3drope-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s1k-lr2e5-nofwclip-v16/<timestamp>/hf-114`.
-
-Pre-launch systems optimization packs the Linear memory output projection across all videos, casts the packed token/head learning rates once before the recurrent loop, and evaluates fast Q and K against the same state in one concatenated batched matmul before splitting the two results. It preserves state order and update math; CPU FP32 regression against the prior per-chunk implementation passes forward, input-gradient, and every parameter-gradient comparison, while a BF16 H100 check with 3D RoPE gives bitwise-equal forward outputs. On a shared H100, a seven-video, 64-frame, 28,672-token one-layer checkpointed forward+backward improves from median `0.19192s` to `0.18185s` (`1.055x`) while peak allocation rises from `3.242` to `3.350 GiB`. The isolated memory scan improves `1.088x`; individual speedups are `1.033x` for packed Q/K state application, `1.030x` for packed output projection, and `1.008x` for packed LR casting. Because another workload occupied the GPU, these are controlled alternating shared-device measurements rather than final FSDP step timings. Artifacts: `/mnt/localssd/VideoChat3/benchmark_h100_lact_linear_scan_pack123_full_layer_shared_gpu.json` and `/mnt/localssd/VideoChat3/benchmark_h100_lact_linear_scan_pack123_final_shared_gpu.json`.
