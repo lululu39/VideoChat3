@@ -825,6 +825,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         clip_state_grad_ratio: bool = True,
         lact_inference_state_mode: str = "continuous",
         lact_3d_rope: bool = False,
+        lact_gate: str = "linear",
     ):
         super().__init__(
             num_heads=num_heads,
@@ -845,6 +846,9 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         self.fw_share_init = fw_share_init
         self.clip_state_grad_ratio = clip_state_grad_ratio
         self.lact_3d_rope = lact_3d_rope
+        if lact_gate not in ("linear", "tanh"):
+            raise ValueError(f"lact_gate must be 'linear' or 'tanh', got {lact_gate!r}")
+        self.lact_gate = lact_gate
         if lact_inference_state_mode not in ("continuous", "reset_state"):
             raise ValueError(f"Unsupported LACT inference state mode: {lact_inference_state_mode!r}")
         self.lact_inference_state_mode = lact_inference_state_mode
@@ -917,6 +921,11 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         query = self.memory.apply_norm(F.silu(query))
         key = self.memory.apply_norm(F.silu(key))
         return query, key, value.contiguous()
+
+    def _effective_memory_gate(self) -> torch.Tensor:
+        if self.lact_gate == "tanh":
+            return torch.tanh(self.memory_gate)
+        return self.memory_gate
 
     def _apply_lact_3d_rope(
         self,
@@ -1002,7 +1011,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         elif not self.lact_3d_rope:
             key = target = memory_input
             memory_output = self.memory(memory_input, fast_weights)
-        hidden_states = hidden_states + memory_output * self.memory_gate
+        hidden_states = hidden_states + memory_output * self._effective_memory_gate()
         return hidden_states, memory_input, key, target
 
     def update_fast_weights(
@@ -1174,7 +1183,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             ).squeeze(0)
             outputs.append(
                 hidden_states[video_start:video_end]
-                + memory_output * self.memory_gate
+                + memory_output * self._effective_memory_gate()
             )
         return torch.cat(outputs, dim=0)
 
@@ -1379,6 +1388,7 @@ class VideoChat3LACTVisionModel(VideoChat3VisionPreTrainedModel):
                 "clip_state_grad_ratio": config.clip_state_grad_ratio,
                 "lact_inference_state_mode": config.lact_inference_state_mode,
                 "lact_3d_rope": config.lact_3d_rope,
+                "lact_gate": config.lact_gate,
             },
         )
         self.post_init()

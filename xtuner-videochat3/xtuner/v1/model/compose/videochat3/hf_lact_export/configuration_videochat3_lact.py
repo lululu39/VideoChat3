@@ -27,6 +27,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         macro_temporal_compression_mode: str = "auto",
         lact_inference_state_mode: str = "continuous",
         lact_3d_rope: bool = False,
+        lact_gate: str = "linear",
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
@@ -86,6 +87,10 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
                 "lact_inference_state_mode must be 'continuous' or 'reset_state', "
                 f"got {lact_inference_state_mode!r}"
             )
+        if lact_gate not in ("linear", "tanh"):
+            raise ValueError(
+                f"lact_gate must be 'linear' or 'tanh', got {lact_gate!r}"
+            )
         self.memory_type = memory_type
         self.fw_inter_multi = fw_inter_multi
         self.fw_num_heads = fw_num_heads
@@ -103,6 +108,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         self.macro_temporal_compression_mode = macro_temporal_compression_mode
         self.lact_inference_state_mode = lact_inference_state_mode
         self.lact_3d_rope = lact_3d_rope
+        self.lact_gate = lact_gate
 
 
 class VideoChat3LACTConfig(VideoChat3Config):

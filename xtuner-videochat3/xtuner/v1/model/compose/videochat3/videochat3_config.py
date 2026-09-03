@@ -80,6 +80,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
     fw_update_layer_group_size: int = 1
     lact_inference_state_mode: Literal["continuous", "reset_state"] = "continuous"
     lact_3d_rope: bool = False
+    lact_gate: Literal["linear", "tanh"] = "linear"
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(__context)
