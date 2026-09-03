@@ -638,3 +638,19 @@ TimeLens-Bench completed on 9,404/9,404 queries: Charades R1@0.3/0.5/0.7/mIoU `5
 | v15 trained Base all-token | `41.39%` | `43.57%` | `55.00%` |
 
 Conclusion: one final chunk is insufficient for temporal grounding even after ViT/projector adaptation. Preserving all visual chunks and training the same Base ViT/projector substantially outperforms both untrained R4 and LACT R4 on all three TimeLens-Bench subsets.
+
+## v16 - Linear16 + Delta 3D RoPE Last-Chunk Token Select, TimeLens Random Half
+
+**Status:** Prepared; launch pending exclusive access to all eight H100s.
+
+- Objective: repeat v13 exactly while enabling 3D RoPE only on LaCT fast Q/K, testing whether explicit per-video global temporal and spatial patch positions improve information retained in the final recurrent chunk.
+- Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; same Base-exact Linear16 attention-share-init as v13, with zero initial linear state and zero memory gates.
+- Data: same seed-42 12,624-row TimeLens random-half manifest over 8,985 videos as v13.
+- Trainable scope: same as v13, all `143,887,104` Linear-FW parameters plus all `33,039,616` projector parameters (`176,926,720` total); original ViT and 4B LM frozen.
+- Memory/update: same as v13, `memory_type=linear`, 16 heads, `inner_optim=delta`, group 1, continuous per-video state, apply-then-update per four-frame chunk, and final update skipped. The sole model change is `lact_3d_rope=True`: T is continuous across chunks within each video, H/W are patch coordinates, and only fast Q/K are rotated before the FW operator.
+- Optimizer/LR schedule: same as v13, FW/projector AdamW `2e-5 -> 1e-6`, 3% warmup, cosine decay, weight decay 0, one epoch, initial inner Delta write strength `0.01`, and learned token/head beta.
+- Stabilization: same as v13, no FW ratio clip or NS5 and XTuner global gradient clip 1.0.
+- Hardware/batch/sequence: 8xH100 ordinary FSDP, global batch 16, 1K sample/pack length, TimeLens 2 FPS, 64-448 frames, total-pixel budget 14,680,064, `video_last` output compression, and a v16-specific cache.
+- Training W&B: [`v16`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-delta-3drope-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s1k-lr2e5-nofwclip-v16).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_LASTCHUNK_FWProj_train_timelens_v16.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-3drope-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s1k-lr2e5-nofwclip-v16/<timestamp>/hf-114`.
