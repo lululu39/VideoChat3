@@ -676,3 +676,19 @@ The tanh-gate restart uses fresh run ID `vc3-4b-lact-linear16-delta-3drope-tanh-
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-gate0p5-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v17/<timestamp>/hf-114`.
 
 Startup validation: all ranks report Linear16+Delta, `lact_3d_rope=1`, `lact_gate=linear`, `lact_gate_init=0.5`, `video_last`, 1,815 packs / 114 steps, and the intended `143.9M` Linear-FW plus `33.0M` projector scope with ViT/LM frozen. Step 1 completes with global CE `0.821944`, finite pre-clip norm `2.6031`, zero warmup LR, and maximum rank allocation `69.58 GB`; no OOM, invalid norm, or skipped update occurs. This differs immediately from the identical v13/v16 step-1 CE/norm of `0.800191/1.3236`, confirming that the 0.5 linear gate activates the FW/3D-RoPE branch at initialization. Active run directory `20260903173458`; native log `torchrun_logs/training_20260903_173441_datava270000004.log`.
+
+## v18 - Linear16 + Delta, No 3D RoPE, Linear Gate 0.5, Last-Chunk Token Select
+
+**Status:** Launching on eight H100s from a clean initialization; no v17 checkpoint is reused.
+
+- Objective: isolate the effect of 3D RoPE by repeating v17 with `lact_3d_rope=False` as the only model/training change.
+- Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; Linear16 private Q/K/V/O retains deterministic attention share-init, linear state starts at zero per video/layer, and every memory-gate element is deterministically reset to `0.5`.
+- Data: same seed-42 12,624-row TimeLens random-half manifest over 8,985 videos as v17.
+- Trainable scope: all `143,887,104` Linear-FW parameters plus all `33,039,616` projector parameters (`176,926,720` total); original ViT and 4B LM frozen.
+- Memory/update: same Linear16+Delta group-1 continuous per-video state as v17, with apply-then-update per four-frame chunk and the final update skipped; the sole model change is disabling 3D RoPE on fast Q/K. The residual remains `lact_gate="linear"` with deterministic `lact_gate_init=0.5`.
+- Optimizer/LR schedule: same as v17, FW/projector AdamW `2e-5 -> 1e-6`, 3% warmup, cosine decay, weight decay 0, one epoch, initial inner Delta write strength `0.01`, and learned token/head beta.
+- Stabilization: same as v17, no FW ratio clip or NS5; XTuner global gradient clip remains 1.0.
+- Hardware/batch/sequence: same as v17, 8xH100 ordinary FSDP, global batch 16, 1K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, `video_last`, and an expected 1,815 packs / 114 steps.
+- Training W&B: [`v18`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-no3drope-gate0p5-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v18).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_NO3DROPE_GATE05_LASTCHUNK_FWProj_train_timelens_v18.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-no3drope-gate0p5-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v18/<timestamp>/hf-114`.
