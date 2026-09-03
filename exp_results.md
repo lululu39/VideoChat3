@@ -671,6 +671,6 @@ The tanh-gate restart uses fresh run ID `vc3-4b-lact-linear16-delta-3drope-tanh-
 - Optimizer/LR schedule: FW/projector AdamW `2e-5 -> 1e-6`, 3% warmup, cosine decay, weight decay 0, one epoch, initial inner Delta write strength `0.01`, and learned token/head beta.
 - Stabilization: no FW ratio clip or NS5; XTuner global gradient clip remains 1.0.
 - Hardware/batch/sequence: 8xH100 ordinary FSDP, global batch 16, 1K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, `video_last`, and 1,815 expected packs / 114 steps.
-- Training W&B: [`v17`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-4b-lact-linear16-delta-3drope-lineargate0p5-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s1k-lr2e5-nofwclip-v17).
+- Training W&B: [`v17`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-gate0p5-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v17).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_GATE05_LASTCHUNK_FWProj_train_timelens_v17.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-4b-lact-linear16-delta-3drope-lineargate0p5-lastchunk-fwproj-timelens-rand12624-8xh100-gb16-video2fps-f448-s1k-lr2e5-nofwclip-v17/<timestamp>/hf-114`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-gate0p5-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v17/<timestamp>/hf-114`.
