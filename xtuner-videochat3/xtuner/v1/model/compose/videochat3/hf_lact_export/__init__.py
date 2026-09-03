@@ -61,6 +61,7 @@ def export_lact_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
         "lact_inference_state_mode",
         "lact_3d_rope",
         "lact_gate",
+        "lact_gate_init",
     )
     hf_vision_config = config.setdefault("vision_config", {})
     hf_vision_config["model_type"] = "videochat3_lact_vision"

@@ -535,6 +535,7 @@ def test_lact_config_builds_separate_vision_model():
     assert config.clip_state_grad_ratio is True
     assert config.lact_3d_rope is False
     assert config.lact_gate == "linear"
+    assert config.lact_gate_init == 0.0
     assert all(block.memory.clip_ns_grad_ratio is False for block in model.encoder.blocks)
     assert all(block.clip_state_grad_ratio is True for block in model.encoder.blocks)
     assert all(block.memory_gate.shape == (16,) for block in model.encoder.blocks)
@@ -543,7 +544,12 @@ def test_lact_config_builds_separate_vision_model():
     tanh_model = VideoChat3LACTVisionConfig(
         **_vision_kwargs(),
         lact_gate="tanh",
+        lact_gate_init=0.5,
     ).build()
+    assert all(
+        torch.all(block.memory_gate == 0.5)
+        for block in tanh_model.encoder.blocks
+    )
     with torch.no_grad():
         tanh_model.encoder.blocks[0].memory_gate.fill_(0.5)
     torch.testing.assert_close(

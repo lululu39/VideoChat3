@@ -1,3 +1,4 @@
+import math
 from pathlib import Path
 from typing import Any, Literal, Optional
 
@@ -81,6 +82,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
     lact_inference_state_mode: Literal["continuous", "reset_state"] = "continuous"
     lact_3d_rope: bool = False
     lact_gate: Literal["linear", "tanh"] = "linear"
+    lact_gate_init: float = 0.0
 
     def model_post_init(self, __context: Any) -> None:
         super().model_post_init(__context)
@@ -111,6 +113,8 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
             raise ValueError("fw_muon_update_steps must be non-negative")
         if self.fw_norm_epsilon <= 0:
             raise ValueError("fw_norm_epsilon must be positive")
+        if not math.isfinite(self.lact_gate_init):
+            raise ValueError("lact_gate_init must be finite")
         if self.fw_update_layer_group_size <= 0:
             raise ValueError("fw_update_layer_group_size must be positive")
         if self.memory_type == "linear" and self.fw_update_layer_group_size != 1:

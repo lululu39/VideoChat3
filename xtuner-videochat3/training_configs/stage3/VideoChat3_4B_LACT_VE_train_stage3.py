@@ -66,6 +66,7 @@ if model_variant == "lact":
             inner_optim=os.getenv("VIDEOCHAT3_INNER_OPTIM", "muon"),
             lact_3d_rope=env_bool("VIDEOCHAT3_LACT_3D_ROPE"),
             lact_gate=os.getenv("VIDEOCHAT3_LACT_GATE", "linear"),
+            lact_gate_init=float(os.getenv("VIDEOCHAT3_LACT_GATE_INIT", "0")),
             clip_ns_grad_ratio=False,
             recompute_ns5_backward=True,
             clip_state_grad_ratio=env_bool(

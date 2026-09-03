@@ -1,3 +1,4 @@
+import math
 from typing import Any
 
 from transformers import AutoConfig
@@ -28,6 +29,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         lact_inference_state_mode: str = "continuous",
         lact_3d_rope: bool = False,
         lact_gate: str = "linear",
+        lact_gate_init: float = 0.0,
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
@@ -91,6 +93,8 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
             raise ValueError(
                 f"lact_gate must be 'linear' or 'tanh', got {lact_gate!r}"
             )
+        if not math.isfinite(lact_gate_init):
+            raise ValueError("lact_gate_init must be finite")
         self.memory_type = memory_type
         self.fw_inter_multi = fw_inter_multi
         self.fw_num_heads = fw_num_heads
@@ -109,6 +113,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         self.lact_inference_state_mode = lact_inference_state_mode
         self.lact_3d_rope = lact_3d_rope
         self.lact_gate = lact_gate
+        self.lact_gate_init = float(lact_gate_init)
 
 
 class VideoChat3LACTConfig(VideoChat3Config):

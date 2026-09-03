@@ -826,6 +826,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         lact_inference_state_mode: str = "continuous",
         lact_3d_rope: bool = False,
         lact_gate: str = "linear",
+        lact_gate_init: float = 0.0,
     ):
         super().__init__(
             num_heads=num_heads,
@@ -849,6 +850,9 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         if lact_gate not in ("linear", "tanh"):
             raise ValueError(f"lact_gate must be 'linear' or 'tanh', got {lact_gate!r}")
         self.lact_gate = lact_gate
+        if not math.isfinite(lact_gate_init):
+            raise ValueError("lact_gate_init must be finite")
+        self.lact_gate_init = float(lact_gate_init)
         if lact_inference_state_mode not in ("continuous", "reset_state"):
             raise ValueError(f"Unsupported LACT inference state mode: {lact_inference_state_mode!r}")
         self.lact_inference_state_mode = lact_inference_state_mode
@@ -896,7 +900,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             nn.init.trunc_normal_(self.lr_proj.weight, std=0.02)
         if self.beta_proj is not None:
             nn.init.trunc_normal_(self.beta_proj.weight, std=0.02)
-        nn.init.zeros_(self.memory_gate)
+        nn.init.constant_(self.memory_gate, self.lact_gate_init)
         if self.value_proj is not None:
             nn.init.trunc_normal_(self.value_proj.weight, std=0.02)
         if self.fw_share_init and not self.fw_share_proj:
@@ -1389,6 +1393,7 @@ class VideoChat3LACTVisionModel(VideoChat3VisionPreTrainedModel):
                 "lact_inference_state_mode": config.lact_inference_state_mode,
                 "lact_3d_rope": config.lact_3d_rope,
                 "lact_gate": config.lact_gate,
+                "lact_gate_init": config.lact_gate_init,
             },
         )
         self.post_init()
