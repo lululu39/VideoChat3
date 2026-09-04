@@ -53,6 +53,7 @@ def export_lact_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
         "inner_optim",
         "fw_share_proj",
         "fw_share_init",
+        "fw_order",
         "fw_norm_epsilon",
         "clip_ns_grad_ratio",
         "recompute_ns5_backward",

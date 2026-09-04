@@ -19,6 +19,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         inner_optim: str = "muon",
         fw_share_proj: bool = False,
         fw_share_init: bool = True,
+        fw_order: str = "serial",
         fw_norm_epsilon: float = 1e-5,
         clip_ns_grad_ratio: bool = False,
         recompute_ns5_backward: bool = True,
@@ -49,6 +50,12 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
             raise ValueError(
                 "fw_share_init only applies to private projections; set it to False when fw_share_proj=True"
             )
+        if fw_order not in ("serial", "parallel"):
+            raise ValueError(
+                f"fw_order must be 'serial' or 'parallel', got {fw_order!r}"
+            )
+        if fw_order == "parallel" and fw_share_proj:
+            raise ValueError("fw_order='parallel' requires private FW projections")
         if memory_type == "linear" and fw_share_proj:
             raise ValueError("linear memory currently requires private projections")
         if fw_base_lr <= 0:
@@ -103,6 +110,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         self.inner_optim = inner_optim
         self.fw_share_proj = fw_share_proj
         self.fw_share_init = fw_share_init
+        self.fw_order = fw_order
         self.fw_norm_epsilon = fw_norm_epsilon
         self.clip_ns_grad_ratio = clip_ns_grad_ratio
         self.recompute_ns5_backward = recompute_ns5_backward

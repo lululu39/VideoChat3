@@ -756,7 +756,7 @@ class FastWeightLinear(nn.Module):
 
 
 class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
-    """Original 4-frame attention followed by recurrent VideoLACT fast weights."""
+    """Window attention with serial or parallel recurrent fast weights."""
 
     def __init__(
         self,
@@ -775,6 +775,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         inner_optim: str = "muon",
         fw_share_proj: bool = False,
         fw_share_init: bool = True,
+        fw_order: str = "serial",
         fw_norm_epsilon: float = 1e-5,
         clip_ns_grad_ratio: bool = False,
         recompute_ns5_backward: bool = True,
@@ -802,9 +803,16 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             )
         if memory_type == "linear" and fw_share_proj:
             raise ValueError("linear memory currently requires private projections")
+        if fw_order not in ("serial", "parallel"):
+            raise ValueError(
+                f"fw_order must be 'serial' or 'parallel', got {fw_order!r}"
+            )
+        if fw_order == "parallel" and fw_share_proj:
+            raise ValueError("fw_order='parallel' requires private FW projections")
         self.memory_type = memory_type
         self.fw_share_proj = fw_share_proj
         self.fw_share_init = fw_share_init
+        self.fw_order = fw_order
         self.clip_state_grad_ratio = clip_state_grad_ratio
         self.lact_3d_rope = lact_3d_rope
         if lact_gate not in ("linear", "tanh"):
@@ -933,6 +941,8 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         hidden_states: torch.Tensor,
         fast_weights,
         lact_rope_freqs_cis: torch.Tensor | None = None,
+        *,
+        add_residual: bool = True,
     ):
         memory_input = self.memory_norm(hidden_states)
         if self.lact_3d_rope:
@@ -975,7 +985,8 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         elif not self.lact_3d_rope:
             key = target = memory_input
             memory_output = self.memory(memory_input, fast_weights)
-        hidden_states = hidden_states + memory_output * self._effective_memory_gate()
+        memory_output = memory_output * self._effective_memory_gate()
+        hidden_states = hidden_states + memory_output if add_residual else memory_output
         return hidden_states, memory_input, key, target
 
     def update_fast_weights(
@@ -1052,6 +1063,8 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         hidden_states: torch.Tensor,
         fast_weights,
         lact_rope_freqs_cis: torch.Tensor | None = None,
+        *,
+        add_residual: bool = True,
     ):
         # Keep the recurrent training path eager. Compiling this per-chunk
         # subgraph inside whole-layer activation checkpointing retains large
@@ -1061,6 +1074,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             hidden_states,
             fast_weights,
             lact_rope_freqs_cis,
+            add_residual=add_residual,
         )
 
     def update_fast_weights_chunk(
@@ -1088,6 +1102,8 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         clip_slices: list[tuple[int, int]],
         video_clip_counts: list[int],
         lact_rope_freqs_cis: torch.Tensor | None = None,
+        *,
+        add_residual: bool = True,
     ) -> torch.Tensor:
         if sum(video_clip_counts) != len(clip_slices):
             raise ValueError(
@@ -1101,7 +1117,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
 
         # A reset linear state is exactly zero, so its memory output is zero.
         if reset_state:
-            return hidden_states
+            return hidden_states if add_residual else torch.zeros_like(hidden_states)
 
         # These projections and normalizations are token-local. Hoisting them
         # over the complete layer input preserves the recurrent state order
@@ -1186,10 +1202,10 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             memory_output = self.memory.project_output(
                 torch.cat(video_memory_outputs, dim=1)
             ).squeeze(0)
-            outputs.append(
-                hidden_states[video_start:video_end]
-                + memory_output * self._effective_memory_gate()
-            )
+            memory_output = memory_output * self._effective_memory_gate()
+            if add_residual:
+                memory_output = hidden_states[video_start:video_end] + memory_output
+            outputs.append(memory_output)
         return torch.cat(outputs, dim=0)
 
     def forward_memory_scan(
@@ -1198,6 +1214,8 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         clip_slices: list[tuple[int, int]],
         video_clip_counts: list[int],
         lact_rope_freqs_cis: torch.Tensor | None = None,
+        *,
+        add_residual: bool = True,
     ) -> torch.Tensor:
         if self.memory_type == "linear":
             return self._forward_linear_memory_scan(
@@ -1205,6 +1223,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                 clip_slices,
                 video_clip_counts,
                 lact_rope_freqs_cis,
+                add_residual=add_residual,
             )
         if self.lact_inference_state_mode == "reset_state":
             if self.training:
@@ -1224,6 +1243,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                             if lact_rope_freqs_cis is None
                             else lact_rope_freqs_cis[start:end]
                         ),
+                        add_residual=add_residual,
                     )
                     outputs.append(clip_hidden.squeeze(0))
                     clip_index += 1
@@ -1262,6 +1282,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                         if lact_rope_freqs_cis is None
                         else lact_rope_freqs_cis[start:end]
                     ),
+                    add_residual=add_residual,
                 )
                 if will_update:
                     fast_weights, master_weights = self.update_fast_weights_chunk(
@@ -1296,17 +1317,25 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         fast_w2: torch.Tensor,
     ):
         """Apply one layer to one temporal chunk without updating FW state."""
+        memory_hidden_states = hidden_states
         hidden_states = self.forward_attention(
             hidden_states,
             cu_seqlens,
             rope_freqs_cis,
         )
-        hidden_states, memory_input, key, target = self.apply_memory_chunk(
-            hidden_states.unsqueeze(0),
+        memory_source = (
+            memory_hidden_states if self.fw_order == "parallel" else hidden_states
+        )
+        memory_result, memory_input, key, target = self.apply_memory_chunk(
+            memory_source.unsqueeze(0),
             (fast_w0, fast_w1, fast_w2),
             lact_rope_freqs_cis,
+            add_residual=self.fw_order == "serial",
         )
-        hidden_states = hidden_states.squeeze(0)
+        if self.fw_order == "parallel":
+            hidden_states = hidden_states + memory_result.squeeze(0)
+        else:
+            hidden_states = memory_result.squeeze(0)
         residual = hidden_states
         hidden_states = self.mlp(self.norm1(hidden_states))
         hidden_states = residual + hidden_states
@@ -1356,12 +1385,22 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             )
         if clip_slices is None or video_clip_counts is None:
             raise ValueError("Full LACT layer forward requires clip layout")
+        memory_hidden_states = hidden_states
         hidden_states = self.forward_attention(hidden_states, cu_seqlens, rope_freqs_cis)
-        hidden_states = self.forward_memory_scan(
-            hidden_states,
+        memory_source = (
+            memory_hidden_states if self.fw_order == "parallel" else hidden_states
+        )
+        memory_result = self.forward_memory_scan(
+            memory_source,
             clip_slices,
             video_clip_counts,
             lact_rope_freqs_cis,
+            add_residual=self.fw_order == "serial",
+        )
+        hidden_states = (
+            hidden_states + memory_result
+            if self.fw_order == "parallel"
+            else memory_result
         )
         residual = hidden_states
         hidden_states = self.mlp(self.norm1(hidden_states))
@@ -1775,6 +1814,7 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
                 "inner_optim": config.inner_optim,
                 "fw_share_proj": config.fw_share_proj,
                 "fw_share_init": config.fw_share_init,
+                "fw_order": config.fw_order,
                 "fw_norm_epsilon": config.fw_norm_epsilon,
                 "clip_ns_grad_ratio": config.clip_ns_grad_ratio,
                 "recompute_ns5_backward": config.recompute_ns5_backward,

@@ -430,20 +430,50 @@ def test_lact_3d_rope_changes_fast_memory_without_changing_chunk_compression():
 def test_zero_memory_gate_preserves_baseline_and_receives_gradient():
     torch.manual_seed(7)
     baseline = VideoChat3VisionConfig(**_vision_kwargs()).build()
-    torch.manual_seed(11)
-    lact = VideoChat3LACTVisionConfig(**_vision_kwargs(), fw_muon_update_steps=0).build()
-    _copy_baseline_weights(baseline, lact)
-
     pixel_values = torch.randn(32, 12)
     grid_thws = torch.tensor([[8, 2, 2]], dtype=torch.int32)
     baseline_output = _flatten_outputs(baseline(pixel_values, grid_thws))
-    lact_output = _flatten_outputs(lact(pixel_values, grid_thws))
-    torch.testing.assert_close(lact_output, baseline_output, rtol=0, atol=0)
+    for fw_order in ("serial", "parallel"):
+        torch.manual_seed(11)
+        lact = VideoChat3LACTVisionConfig(
+            **_vision_kwargs(),
+            fw_muon_update_steps=0,
+            fw_order=fw_order,
+        ).build()
+        _copy_baseline_weights(baseline, lact)
+        lact_output = _flatten_outputs(lact(pixel_values, grid_thws))
+        torch.testing.assert_close(lact_output, baseline_output, rtol=0, atol=0)
 
-    lact_output.sum().backward()
-    for block in lact.encoder.blocks:
-        assert block.memory_gate.grad is not None
-        assert torch.count_nonzero(block.memory_gate.grad).item() > 0
+        lact_output.sum().backward()
+        for block in lact.encoder.blocks:
+            assert block.memory_gate.grad is not None
+            assert torch.count_nonzero(block.memory_gate.grad).item() > 0
+
+
+def test_parallel_fw_branch_uses_a_different_input_from_serial_order():
+    torch.manual_seed(23)
+    serial = VideoChat3LACTVisionConfig(
+        **_vision_kwargs(),
+        fw_muon_update_steps=0,
+        fw_order="serial",
+    ).build()
+    parallel = VideoChat3LACTVisionConfig(
+        **_vision_kwargs(),
+        fw_muon_update_steps=0,
+        fw_order="parallel",
+    ).build()
+    parallel.load_state_dict(serial.state_dict())
+    with torch.no_grad():
+        for model in (serial, parallel):
+            for block in model.encoder.blocks:
+                block.memory_gate.fill_(0.1)
+
+    pixel_values = torch.randn(32, 12)
+    grid_thws = torch.tensor([[8, 2, 2]], dtype=torch.int32)
+    serial_output = _flatten_outputs(serial(pixel_values, grid_thws))
+    parallel_output = _flatten_outputs(parallel(pixel_values, grid_thws))
+
+    assert not torch.allclose(serial_output, parallel_output)
 
 
 def test_fast_state_updates_later_clip_and_resets_at_video_boundary():
@@ -534,12 +564,21 @@ def test_lact_config_builds_separate_vision_model():
     assert config.clip_ns_grad_ratio is False
     assert config.clip_state_grad_ratio is True
     assert config.lact_3d_rope is False
+    assert config.fw_order == "serial"
     assert config.lact_gate == "linear"
     assert config.lact_gate_init == 0.0
     assert all(block.memory.clip_ns_grad_ratio is False for block in model.encoder.blocks)
     assert all(block.clip_state_grad_ratio is True for block in model.encoder.blocks)
+    assert all(block.fw_order == "serial" for block in model.encoder.blocks)
     assert all(block.memory_gate.shape == (16,) for block in model.encoder.blocks)
     assert all(torch.count_nonzero(block.memory_gate).item() == 0 for block in model.encoder.blocks)
+
+    parallel_model = VideoChat3LACTVisionConfig(
+        **_vision_kwargs(),
+        fw_order="parallel",
+    ).build()
+    assert all(block.fw_order == "parallel" for block in parallel_model.encoder.blocks)
+    assert all(block.fw_share_proj is False for block in parallel_model.encoder.blocks)
 
     tanh_model = VideoChat3LACTVisionConfig(
         **_vision_kwargs(),

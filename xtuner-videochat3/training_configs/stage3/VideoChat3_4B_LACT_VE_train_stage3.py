@@ -64,6 +64,7 @@ if model_variant == "lact":
             memory_type=os.getenv("VIDEOCHAT3_MEMORY_TYPE", "swiglu"),
             fw_num_heads=int(os.getenv("VIDEOCHAT3_FW_NUM_HEADS", "1")),
             inner_optim=os.getenv("VIDEOCHAT3_INNER_OPTIM", "muon"),
+            fw_order=os.getenv("VIDEOCHAT3_FW_ORDER", "serial"),
             lact_3d_rope=env_bool("VIDEOCHAT3_LACT_3D_ROPE"),
             lact_gate=os.getenv("VIDEOCHAT3_LACT_GATE", "linear"),
             lact_gate_init=float(os.getenv("VIDEOCHAT3_LACT_GATE_INIT", "0")),
