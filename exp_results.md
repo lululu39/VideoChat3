@@ -733,7 +733,7 @@ Conclusion: against the matched v17 run, disabling 3D RoPE changes mIoU by `+4.0
 
 ## v19 - Parallel Linear16 + Delta 3D RoPE, Linear Gate 0, Last-Chunk Token Select
 
-**Status:** Active on eight H100s from a clean initialization; no prior experiment checkpoint is reused.
+**Status:** Training completed at step 114/114; checkpoint diagnostics are complete and native TimeLens-Bench evaluation is pending.
 
 - Objective: repeat v17 while changing the LACT block topology from serial to parallel and restoring zero-initialized gates, so window attention and the private-projection FW branch consume the same pre-attention layer input.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; Linear16 private Q/K/V/O retains deterministic attention share-init, linear state starts at zero per video/layer, and every memory-gate element is deterministically reset to `0`.
@@ -748,3 +748,13 @@ Conclusion: against the matched v17 run, disabling 3D RoPE changes mIoU by `+4.0
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v19/<timestamp>/hf-114`.
 
 Startup validation: all rank environments report `fw_order=parallel`, Linear16+Delta, private projections, `lact_3d_rope=1`, `lact_gate=linear`, `lact_gate_init=0`, `video_last`, and 1,815 packs / 114 steps. Public W&B authenticated as `yibozhong657 (LVSM-Experiment)`, and FSDP reports `143.0M` Linear-FW plus `33.0M` projector parameters trainable with ViT/LM frozen. Step 1 completes with global CE `0.80019104`, finite pre-clip norm `1.32405603`, zero warmup LR, and maximum rank allocation/reservation `69.58/73.77 GB`; no OOM, invalid norm, skipped update, or traceback occurs. The loss exactly matches the zero-gate v13/v16 step 1 (`0.800191`), as expected while the parallel FW residual is closed. Active run directory `20260904030325`; native log `torchrun_logs/training_20260904_030308_datava270000004.log`.
+
+Training completion: v19 finished one epoch at step 114/114 in `24,325.59s` and saved `20260904030325/hf-114`. First/final global CE is `0.8002/0.3906`; first/last-20 mean is `0.5889/0.3897`. Pre-clip grad norm mean/median/max is `0.476/0.216/3.762`, with the maximum at step 12; no nonfinite norm, skipped update, traceback, or OOM appears. Rank-0 stable step median excluding step 1 is `211.57s`; maximum allocated/reserved memory is `75.76/77.01 GB`.
+
+Checkpoint inspection `20260904030325/checkpoint_inspection.json` compares the BF16 HF export with the configured zero-gate Linear16 attention-share initialization. All 31,104 gates are nonzero, with RMS/mean-absolute/max-absolute `2.60e-4/2.00e-4/8.93e-4`. FW private/value relative L2 deltas are `0.449%/0.577%`, projector delta is `1.534%`, and FW memory norm plus original attention/MLP/other ViT and 4B LM remain bitwise unchanged. The trained beta projection has RMS `0.02001`.
+
+### TimeLens-Bench Native Evaluation
+
+**Status:** Launch pending. Fixed native generation/scoring protocol matches v17/v18: all 9,404 queries, 2 FPS, up to 448 frames, 224px/14,680,064-total-pixel budget, official R1@0.3/0.5/0.7 and mIoU.
+
+Config: `vlmevalkit-videochat3/configs/videochat3_v19_timelens_bench.json`; launcher: `scripts/eval_videochat3_v19_timelens_bench.sh`; expected artifact root: `/mnt/localssd/VideoChat3/eval/videochat3-v19-timelens-bench`.
