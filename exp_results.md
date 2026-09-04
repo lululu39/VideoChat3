@@ -661,7 +661,7 @@ The tanh-gate restart uses fresh run ID `vc3-4b-lact-linear16-delta-3drope-tanh-
 
 ## v17 - Linear16 + Delta 3D RoPE, Linear Gate 0.5, Last-Chunk Token Select
 
-**Status:** Training completed at step 114/114; checkpoint diagnostics complete and native TimeLens-Bench evaluation is prepared.
+**Status:** Training completed at step 114/114; checkpoint diagnostics and native TimeLens-Bench evaluation are complete.
 
 - Objective: repeat v16 while removing the near-zero gate bottleneck, testing 3D-RoPE Linear memory with a strong residual from the first batch.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; Linear16 private Q/K/V/O retains deterministic attention share-init, linear state starts at zero per video/layer, and every memory-gate element is deterministically reset to `0.5`.
@@ -683,9 +683,17 @@ Checkpoint inspection `20260903173458/checkpoint_inspection.json` reconstructs t
 
 ### TimeLens-Bench Native Evaluation
 
-**Status:** Prepared with the fixed native generation/scoring protocol: 2 FPS, up to 448 frames, 224px/14,680,064-total-pixel budget, and all 9,404 queries across Charades, ActivityNet, and QVHighlights.
+**Status:** Completed on all 9,404 queries with no missing predictions. Fixed native generation/scoring protocol: 2 FPS, up to 448 frames, 224px/14,680,064-total-pixel budget.
 
-Config: `vlmevalkit-videochat3/configs/videochat3_v17_timelens_bench.json`; launcher: `scripts/eval_videochat3_v17_timelens_bench.sh`; expected artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v17-timelens-bench/VideoChat3-4B-LACT-v17/<timestamp>`.
+| Subset | Base video-last R1@0.3 | v17 R1@0.3 | Delta | Base R1@0.5 | v17 R1@0.5 | Delta | Base R1@0.7 | v17 R1@0.7 | Delta | Base mIoU | v17 mIoU | Delta |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Charades-TimeLens | `17.54%` | `13.35%` | `-4.19` | `10.05%` | `8.00%` | `-2.05` | `3.57%` | `2.62%` | `-0.95` | `11.80%` | `9.21%` | `-2.59` |
+| ActivityNet-TimeLens | `9.60%` | `6.58%` | `-3.02` | `5.20%` | `2.93%` | `-2.27` | `2.04%` | `1.02%` | `-1.02` | `7.74%` | `5.57%` | `-2.17` |
+| QVHighlights-TimeLens | `2.14%` | `3.18%` | `+1.04` | `1.23%` | `1.56%` | `+0.33` | `0.52%` | `0.58%` | `+0.06` | `3.06%` | `3.68%` | `+0.62` |
+
+Config: `vlmevalkit-videochat3/configs/videochat3_v17_timelens_bench.json`; launcher: `scripts/eval_videochat3_v17_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v17-timelens-bench/VideoChat3-4B-LACT-v17/T20260904_G722270d3`.
+
+Conclusion: fixing every gate at 0.5 makes the Linear-FW/3D-RoPE branch active and changes optimization, but does not recover information lost by final-chunk-only output. Relative to the matched trained Base video-last model, v17 loses `2.59/2.17` mIoU on Charades/ActivityNet and gains only `0.62` on QVHighlights; it is also below v13's `10.41/7.19/3.82%` mIoU on all three subsets. A large gate alone is not the solution, and final-chunk-only compression remains invalid for grounding.
 
 ## v18 - Linear16 + Delta, No 3D RoPE, Linear Gate 0.5, Last-Chunk Token Select
 
