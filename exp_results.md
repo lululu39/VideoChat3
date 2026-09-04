@@ -733,7 +733,7 @@ Conclusion: against the matched v17 run, disabling 3D RoPE changes mIoU by `+4.0
 
 ## v19 - Parallel Linear16 + Delta 3D RoPE, Linear Gate 0, Last-Chunk Token Select
 
-**Status:** Training completed at step 114/114; checkpoint diagnostics are complete and native TimeLens-Bench evaluation is pending.
+**Status:** Training completed at step 114/114; checkpoint diagnostics and native TimeLens-Bench evaluation are complete.
 
 - Objective: repeat v17 while changing the LACT block topology from serial to parallel and restoring zero-initialized gates, so window attention and the private-projection FW branch consume the same pre-attention layer input.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; Linear16 private Q/K/V/O retains deterministic attention share-init, linear state starts at zero per video/layer, and every memory-gate element is deterministically reset to `0`.
@@ -755,6 +755,14 @@ Checkpoint inspection `20260904030325/checkpoint_inspection.json` compares the B
 
 ### TimeLens-Bench Native Evaluation
 
-**Status:** Launch pending. Fixed native generation/scoring protocol matches v17/v18: all 9,404 queries, 2 FPS, up to 448 frames, 224px/14,680,064-total-pixel budget, official R1@0.3/0.5/0.7 and mIoU.
+**Status:** Completed on all 9,404 queries with no missing predictions. Fixed native generation/scoring protocol matches v17/v18: 2 FPS, up to 448 frames, 224px/14,680,064-total-pixel budget.
 
-Config: `vlmevalkit-videochat3/configs/videochat3_v19_timelens_bench.json`; launcher: `scripts/eval_videochat3_v19_timelens_bench.sh`; expected artifact root: `/mnt/localssd/VideoChat3/eval/videochat3-v19-timelens-bench`.
+| Subset | Base video-last R1@0.3 | v19 R1@0.3 | Delta | Base R1@0.5 | v19 R1@0.5 | Delta | Base R1@0.7 | v19 R1@0.7 | Delta | Base mIoU | v19 mIoU | Delta |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Charades-TimeLens | `17.54%` | `15.46%` | `-2.08` | `10.05%` | `8.86%` | `-1.19` | `3.57%` | `3.12%` | `-0.45` | `11.80%` | `10.54%` | `-1.26` |
+| ActivityNet-TimeLens | `9.60%` | `8.73%` | `-0.87` | `5.20%` | `4.78%` | `-0.42` | `2.04%` | `2.18%` | `+0.14` | `7.74%` | `7.25%` | `-0.49` |
+| QVHighlights-TimeLens | `2.14%` | `2.92%` | `+0.78` | `1.23%` | `1.43%` | `+0.20` | `0.52%` | `0.84%` | `+0.32` | `3.06%` | `3.91%` | `+0.85` |
+
+Config: `vlmevalkit-videochat3/configs/videochat3_v19_timelens_bench.json`; launcher: `scripts/eval_videochat3_v19_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v19-timelens-bench/VideoChat3-4B-LACT-v19/T20260904_G264def82`.
+
+Conclusion: v19's parallel zero-init branch improves mIoU over serial gate-0.5 v17 by `+1.33/+1.68/+0.23` points on Charades/ActivityNet/QVHighlights, but it remains below the matched Base video-last model by `1.26/0.49` points on the first two subsets and gains only `0.85` on QVHighlights. Against v18 it changes mIoU by `-2.68/+0.20/+0.99`, so neither topology nor the small learned gate gives a consistent win. Like v17/v18, v19 remains far below the full-visual-token Base results; final-chunk-only compression is still the dominant bottleneck.
