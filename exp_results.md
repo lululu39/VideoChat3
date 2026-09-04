@@ -715,7 +715,7 @@ Startup validation: public W&B authenticated as `yibozhong657 (LVSM-Experiment)`
 
 ## v19 - Parallel Linear16 + Delta 3D RoPE, Linear Gate 0, Last-Chunk Token Select
 
-**Status:** Launch pending from a clean initialization; no prior experiment checkpoint is reused.
+**Status:** Active on eight H100s from a clean initialization; no prior experiment checkpoint is reused.
 
 - Objective: repeat v17 while changing the LACT block topology from serial to parallel and restoring zero-initialized gates, so window attention and the private-projection FW branch consume the same pre-attention layer input.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; Linear16 private Q/K/V/O retains deterministic attention share-init, linear state starts at zero per video/layer, and every memory-gate element is deterministically reset to `0`.
@@ -728,3 +728,5 @@ Startup validation: public W&B authenticated as `yibozhong657 (LVSM-Experiment)`
 - Training W&B: [`v19`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v19).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_LASTCHUNK_FWProj_train_timelens_v19.sh`.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v19/<timestamp>/hf-114`.
+
+Startup validation: all rank environments report `fw_order=parallel`, Linear16+Delta, private projections, `lact_3d_rope=1`, `lact_gate=linear`, `lact_gate_init=0`, `video_last`, and 1,815 packs / 114 steps. Public W&B authenticated as `yibozhong657 (LVSM-Experiment)`, and FSDP reports `143.0M` Linear-FW plus `33.0M` projector parameters trainable with ViT/LM frozen. Step 1 completes with global CE `0.80019104`, finite pre-clip norm `1.32405603`, zero warmup LR, and maximum rank allocation/reservation `69.58/73.77 GB`; no OOM, invalid norm, skipped update, or traceback occurs. The loss exactly matches the zero-gate v13/v16 step 1 (`0.800191`), as expected while the parallel FW residual is closed. Active run directory `20260904030325`; native log `torchrun_logs/training_20260904_030308_datava270000004.log`.
