@@ -661,7 +661,7 @@ The tanh-gate restart uses fresh run ID `vc3-4b-lact-linear16-delta-3drope-tanh-
 
 ## v17 - Linear16 + Delta 3D RoPE, Linear Gate 0.5, Last-Chunk Token Select
 
-**Status:** Active on eight H100s from a clean initialization after v16 stopped; no v16 checkpoint is reused.
+**Status:** Training completed at step 114/114; checkpoint diagnostics complete and native TimeLens-Bench evaluation is prepared.
 
 - Objective: repeat v16 while removing the near-zero gate bottleneck, testing 3D-RoPE Linear memory with a strong residual from the first batch.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; Linear16 private Q/K/V/O retains deterministic attention share-init, linear state starts at zero per video/layer, and every memory-gate element is deterministically reset to `0.5`.
@@ -676,6 +676,16 @@ The tanh-gate restart uses fresh run ID `vc3-4b-lact-linear16-delta-3drope-tanh-
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-gate0p5-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v17/<timestamp>/hf-114`.
 
 Startup validation: all ranks report Linear16+Delta, `lact_3d_rope=1`, `lact_gate=linear`, `lact_gate_init=0.5`, `video_last`, 1,815 packs / 114 steps, and the intended `143.9M` Linear-FW plus `33.0M` projector scope with ViT/LM frozen. Step 1 completes with global CE `0.821944`, finite pre-clip norm `2.6031`, zero warmup LR, and maximum rank allocation `69.58 GB`; no OOM, invalid norm, or skipped update occurs. This differs immediately from the identical v13/v16 step-1 CE/norm of `0.800191/1.3236`, confirming that the 0.5 linear gate activates the FW/3D-RoPE branch at initialization. Active run directory `20260903173458`; native log `torchrun_logs/training_20260903_173441_datava270000004.log`.
+
+Training completion: v17 finished one epoch at step 114/114 and saved `20260903173458/hf-114`. First/final global CE is `0.8219/0.3939`; first/last-20 mean is `0.5443/0.3885`. Pre-clip grad norm mean/median/max is `0.405/0.201/2.958` with the maximum at step 7; no NaN, invalid norm, skipped update, traceback, or OOM appears. Rank-0 stable step median excluding step 1 is `213.24s`; maximum allocated/reserved memory is `75.89/77.03 GB`.
+
+Checkpoint inspection `20260903173458/checkpoint_inspection.json` reconstructs the seed-42 Linear16+Delta+3D-RoPE initialization with gate 0.5. All 31,104 gates remain bitwise exactly `0.5` because BF16 updates at this magnitude are below the parameter quantization interval. FW beta/private/value relative L2 deltas are `141.55%/0.881%/0.789%`, projector delta is `1.063%`, FW memory norm and original ViT/LM remain bitwise unchanged.
+
+### TimeLens-Bench Native Evaluation
+
+**Status:** Prepared with the fixed native generation/scoring protocol: 2 FPS, up to 448 frames, 224px/14,680,064-total-pixel budget, and all 9,404 queries across Charades, ActivityNet, and QVHighlights.
+
+Config: `vlmevalkit-videochat3/configs/videochat3_v17_timelens_bench.json`; launcher: `scripts/eval_videochat3_v17_timelens_bench.sh`; expected artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v17-timelens-bench/VideoChat3-4B-LACT-v17/<timestamp>`.
 
 ## v18 - Linear16 + Delta, No 3D RoPE, Linear Gate 0.5, Last-Chunk Token Select
 
