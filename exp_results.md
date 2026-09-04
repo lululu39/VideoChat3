@@ -769,7 +769,7 @@ Conclusion: v19's parallel zero-init branch improves mIoU over serial gate-0.5 v
 
 ## v20 - Parallel Linear16 + Delta 3D RoPE, Zero Gate, Constant Peak LR
 
-**Status:** Launch pending from a clean initialization; no v19 checkpoint is reused.
+**Status:** Stopped by the user after step 25/114; no checkpoint exists and this run must not be resumed or evaluated.
 
 - Objective: test whether v19 is limited by cosine LR decay by repeating it with warmup followed by a constant peak LR as the only optimization change.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; same deterministic Linear16 attention-share initialization, zero linear state, and zero linear memory gate as v19.
@@ -782,3 +782,21 @@ Conclusion: v19's parallel zero-init branch improves mIoU over serial gate-0.5 v
 - Training W&B: [`v20`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-constlr-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v20).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_CONSTLR_LASTCHUNK_FWProj_train_timelens_v20.sh`.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-constlr-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v20/<timestamp>/hf-114`.
+
+Diagnostic conclusion: v20 held both live groups at exactly `2e-5` from step 4 through step 25. Against the identical first 25 v19 batches, mean CE changed by only `-9.4e-5`; over steps 20-25 the change was `-5.65e-4`, with v20 mean CE/grad norm `0.41997/0.3935` versus v19 `0.42054/0.4002`. Constant peak LR produced no material early learning change, so the run was stopped cleanly at step 25. No invalid norm, skipped update, traceback, or OOM occurred.
+
+## v21 - Parallel Linear16 + Delta 3D RoPE, Zero Gate, 100x Gate LR
+
+**Status:** Launch pending from a clean initialization; no v19/v20 checkpoint is reused.
+
+- Objective: test whether v19's memory gate is learning-rate limited by repeating v19 with a 100x gate-only outer LR as the sole model-optimization change.
+- Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; identical deterministic Linear16 attention-share initialization, zero linear state, and zero linear memory gate as v19.
+- Data: identical seed-42 12,624-row TimeLens random-half manifest and reused v19 packing cache, preserving the same 1,815 packs and batch order.
+- Trainable scope: identical parameters to v19, but split into `143,856,000` non-gate Linear-FW parameters, `31,104` memory-gate parameters, and `33,039,616` projector parameters; original ViT and 4B LM remain frozen.
+- Memory/update: identical to v19, parallel private-projection Linear16+Delta group-1 state, fast-Q/K 3D RoPE, apply-then-update with final update skipped, and a zero-initialized linear gate.
+- Optimizer/LR schedule: AdamW with weight decay 0 and one epoch. Non-gate FW/projector retain v19's 3% warmup and cosine `2e-5 -> 1e-6`; only memory gates use the exact proportional 100x schedule `2e-3 -> 1e-4`, selected with `lact_gate_lr=2e-3` and `lr_min_ratio=0.05`. Inner Delta write strength remains `0.01` with learned token/head beta.
+- Stabilization: identical to v19, no FW ratio clip or NS5; XTuner global gradient clip remains 1.0 across all three optimizer groups.
+- Hardware/batch/sequence: identical to v19, 8xH100 ordinary FSDP, global batch 16, 1K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, `video_last`, 1,815 packs, and 114 optimizer steps.
+- Training W&B: [`v21`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-gatelr2e3-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v21).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_GATELR100X_LASTCHUNK_FWProj_train_timelens_v21.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-gatelr2e3-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v21/<timestamp>/hf-114`.
