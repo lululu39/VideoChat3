@@ -823,4 +823,20 @@ Diagnostic conclusion: through the identical first 27 batches, v21 lowers mean C
 
 Diagnostic conclusion: gate 0.5 immediately changes the parallel branch before any optimizer update: step-1 CE/grad norm is `0.78519/2.3822`, versus zero-gate `0.80019/1.3241`. Step 3 remains finite at `0.76487/2.9020` after the first 100x gate-LR update. Through step 15, mean CE is `0.1162` below matched v19, but the last-five advantage shrinks to `0.0674` and step 15 reaches `0.40969/0.1216`; the user judged the trajectory insufficient and stopped it. There is no invalid norm, skipped update, traceback, or OOM.
 
+## v23 - Parallel Linear16 + Delta 3D RoPE, Per-Chunk Query Output
+
+**Status:** Cache/build validation pending; no prior experiment checkpoint is reused.
+
+- Objective: replace final-chunk-only spatial output with one learned summary query per existing four-frame chunk, restoring a direct LM supervision path for every chunk while compressing each chunk to one visual token.
+- Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; Linear16 private Q/K/V/O uses deterministic attention share-init, recurrent state and linear gates start at zero, and one shared learned query is initialized with truncated normal standard deviation `0.02` and replicated at the end of every chunk.
+- Data: seed-42 12,624-row TimeLens random-half manifest over 8,985 videos; a new query-aware cache is required because placeholder counts change.
+- Trainable scope: all LACT-added parameters including the shared query and gates plus all `33,039,616` projector parameters; original ViT and 4B LM frozen.
+- Memory/update: parallel private-projection Linear16+Delta group-1 continuous state with fast-Q/K 3D RoPE. The chunk query participates in every window-attention and FW-read path but is excluded from FW writes; its vision-side RoPE is identity, while each retained query keeps its explicit timestamp and ordinary LLM sequence position.
+- Optimizer/LR schedule: one uniform AdamW LR for FW/query/gate/projector, 3% warmup and cosine `2e-5 -> 1e-6`, weight decay 0, one epoch, initial inner Delta write strength `0.01`, and learned token/head beta. There is no gate-specific LR group.
+- Stabilization: no FW ratio clip or NS5; XTuner global gradient clip remains 1.0.
+- Hardware/batch/sequence: 8xH100 ordinary FSDP, global batch 16, 1K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, and one retained LM visual token per four-frame chunk.
+- Training W&B: [`v23`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-chunkquery-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v23).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_CHUNKQUERY_train_timelens_v23.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-chunkquery-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v23/<timestamp>/hf-<final-step>`.
+
 Startup validation: FSDP reports the intended `143.0M` non-gate FW, `0.031M` gate, and `33.0M` projector groups with peak LRs `2e-5/2e-3/2e-5`. With all step-1 LRs still zero, the active 0.5 gate changes CE/grad norm from v21's `0.800191/1.32405` to `0.785189/2.38221`, isolating a favorable initialization effect. Step 2 is `0.771898/2.53422` at group LRs `6.6667e-6/6.6667e-4/6.6667e-6`; after that first high-gate-LR update, step 3 remains finite at `0.764866/2.90198`, versus matched v21 `0.784753/1.44137`. There is no OOM, invalid norm, skipped update, or traceback. Active run directory `20260904184242`; native log `torchrun_logs/training_20260904_184225_datava270000004.log`.
