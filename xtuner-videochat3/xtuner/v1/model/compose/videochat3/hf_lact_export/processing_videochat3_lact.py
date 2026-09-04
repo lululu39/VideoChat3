@@ -104,8 +104,7 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
                 key: value.unsqueeze(0) if squeeze and value.ndim == 1 else value
                 for key, value in outputs.items()
                 if isinstance(value, torch.Tensor)
-                and value.ndim in (1, 2)
-                and value.shape[-1] == input_ids.shape[-1]
+                and value.shape == input_ids.shape
             }
             max_length = max(int(mask.sum().item()) for mask in keep_masks)
             padding_side = getattr(self.tokenizer, "padding_side", "right")
