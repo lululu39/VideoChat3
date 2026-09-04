@@ -203,7 +203,7 @@ optim_cfg = VisionAdamWConfig(
     foreach=False,
 )
 lr_cfg = LRConfig(
-    lr_type="cosine",
+    lr_type=os.getenv("VIDEOCHAT3_LR_TYPE", "cosine"),
     warmup_ratio=warmup_ratio,
     lr_min=lr_min,
     lr_min_ratio=lr_min_ratio,

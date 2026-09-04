@@ -766,3 +766,19 @@ Checkpoint inspection `20260904030325/checkpoint_inspection.json` compares the B
 Config: `vlmevalkit-videochat3/configs/videochat3_v19_timelens_bench.json`; launcher: `scripts/eval_videochat3_v19_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v19-timelens-bench/VideoChat3-4B-LACT-v19/T20260904_G264def82`.
 
 Conclusion: v19's parallel zero-init branch improves mIoU over serial gate-0.5 v17 by `+1.33/+1.68/+0.23` points on Charades/ActivityNet/QVHighlights, but it remains below the matched Base video-last model by `1.26/0.49` points on the first two subsets and gains only `0.85` on QVHighlights. Against v18 it changes mIoU by `-2.68/+0.20/+0.99`, so neither topology nor the small learned gate gives a consistent win. Like v17/v18, v19 remains far below the full-visual-token Base results; final-chunk-only compression is still the dominant bottleneck.
+
+## v20 - Parallel Linear16 + Delta 3D RoPE, Zero Gate, Constant Peak LR
+
+**Status:** Launch pending from a clean initialization; no v19 checkpoint is reused.
+
+- Objective: test whether v19 is limited by cosine LR decay by repeating it with warmup followed by a constant peak LR as the only optimization change.
+- Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; same deterministic Linear16 attention-share initialization, zero linear state, and zero linear memory gate as v19.
+- Data: identical seed-42 12,624-row TimeLens random-half manifest and reused v19 packing cache, preserving the same 1,815 packs and batch order.
+- Trainable scope: identical to v19, all `143,887,104` Linear-FW parameters plus all `33,039,616` projector parameters (`176,926,720` total); original ViT and 4B LM frozen.
+- Memory/update: identical to v19, parallel private-projection Linear16+Delta group-1 state, fast-Q/K 3D RoPE, apply-then-update with final update skipped, and `lact_gate="linear"` initialized to zero.
+- Optimizer/LR schedule: FW/projector AdamW with weight decay 0 and one epoch; retain the 3% three-step warmup to `2e-5`, then hold every parameter group at `2e-5` through step 114 with `lr_type="constant"`. Inner Delta write strength remains `0.01` with learned token/head beta.
+- Stabilization: identical to v19, no FW ratio clip or NS5; XTuner global gradient clip remains 1.0.
+- Hardware/batch/sequence: identical to v19, 8xH100 ordinary FSDP, global batch 16, 1K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, `video_last`, 1,815 packs, and 114 optimizer steps.
+- Training W&B: [`v20`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-constlr-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v20).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_CONSTLR_LASTCHUNK_FWProj_train_timelens_v20.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-constlr-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v20/<timestamp>/hf-114`.
