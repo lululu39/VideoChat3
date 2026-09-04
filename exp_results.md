@@ -697,7 +697,7 @@ Conclusion: fixing every gate at 0.5 makes the Linear-FW/3D-RoPE branch active a
 
 ## v18 - Linear16 + Delta, No 3D RoPE, Linear Gate 0.5, Last-Chunk Token Select
 
-**Status:** Active on eight H100s from a clean initialization; no v17 checkpoint is reused.
+**Status:** Training completed at step 114/114; checkpoint diagnostics and native TimeLens-Bench evaluation are complete.
 
 - Objective: isolate the effect of 3D RoPE by repeating v17 with `lact_3d_rope=False` as the only model/training change.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; Linear16 private Q/K/V/O retains deterministic attention share-init, linear state starts at zero per video/layer, and every memory-gate element is deterministically reset to `0.5`.
@@ -712,6 +712,24 @@ Conclusion: fixing every gate at 0.5 makes the Linear-FW/3D-RoPE branch active a
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-no3drope-gate0p5-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v18/<timestamp>/hf-114`.
 
 Startup validation: public W&B authenticated as `yibozhong657 (LVSM-Experiment)` and all ranks use the v17 recipe with the launcher-pinned `VIDEOCHAT3_LACT_3D_ROPE=0`. The cache contains the expected 1,815 packs / 114 steps, and FSDP reports `143.9M` Linear-FW plus `33.0M` projector parameters trainable with ViT/LM frozen. Step 1 completes with global CE `0.81602192`, finite pre-clip norm `2.23620701`, zero warmup LR, and maximum rank allocation `69.47 GB`; step 2 applies LR `6.666667e-6` with CE `0.80586886`, norm `2.36562490`, and maximum rank allocation `72.27 GB`. There is no OOM, invalid norm, or skipped update. The corresponding v17 3D-RoPE step-1 CE/norm was `0.821944/2.6031`, so disabling 3D RoPE measurably changes the active gate-0.5 FW branch without changing the batch or optimizer. Active run directory `20260903180830`; native log `torchrun_logs/training_20260903_180813_datava270000001.log`.
+
+Training completion: v18 finished one epoch at step 114/114 and saved `20260903180830/hf-114`. First/final global CE is `0.8160/0.3887`; first/last-20 mean is `0.5611/0.3868`. Pre-clip grad norm mean/median/max is `0.427/0.227/2.754`, with the maximum at step 9; only steps 1-11 exceed the global clip threshold 1.0, and no nonfinite norm, skipped update, traceback, or OOM appears. Rank-0 stable step median excluding step 1 is `267.84s`; maximum allocated/reserved memory is `75.77/76.98 GB`.
+
+Checkpoint inspection `20260903180830/checkpoint_inspection.json` reconstructs the seed-42 Linear16+Delta/no-3D-RoPE initialization with gate 0.5. The step-114 DCP FP32 master gates learn: 31,099/31,104 values change, delta RMS/mean-absolute/max-absolute is `1.77e-4/1.46e-4/5.90e-4`, and every Adam first moment is nonzero. Their range `0.499431-0.500590` still rounds entirely to `0.5` in the BF16 HF export. FW beta/private/value relative L2 deltas are `141.43%/0.876%/0.784%`, projector delta is `1.049%`, and FW memory norm plus original ViT/LM remain bitwise unchanged.
+
+### TimeLens-Bench Native Evaluation
+
+**Status:** Completed on all 9,404 queries with no missing predictions. Fixed native generation/scoring protocol: 2 FPS, up to 448 frames, 224px/14,680,064-total-pixel budget.
+
+| Subset | Base video-last R1@0.3 | v18 R1@0.3 | Delta | Base R1@0.5 | v18 R1@0.5 | Delta | Base R1@0.7 | v18 R1@0.7 | Delta | Base mIoU | v18 mIoU | Delta |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Charades-TimeLens | `17.54%` | `19.66%` | `+2.12` | `10.05%` | `11.78%` | `+1.73` | `3.57%` | `4.04%` | `+0.47` | `11.80%` | `13.22%` | `+1.42` |
+| ActivityNet-TimeLens | `9.60%` | `8.58%` | `-1.02` | `5.20%` | `4.49%` | `-0.71` | `2.04%` | `1.58%` | `-0.46` | `7.74%` | `7.05%` | `-0.69` |
+| QVHighlights-TimeLens | `2.14%` | `1.95%` | `-0.19` | `1.23%` | `0.84%` | `-0.39` | `0.52%` | `0.32%` | `-0.20` | `3.06%` | `2.92%` | `-0.14` |
+
+Config: `vlmevalkit-videochat3/configs/videochat3_v18_timelens_bench.json`; launcher: `scripts/eval_videochat3_v18_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v18-timelens-bench/VideoChat3-4B-LACT-v18/T20260904_G31a9b775`.
+
+Conclusion: against the matched v17 run, disabling 3D RoPE changes mIoU by `+4.01/+1.48/-0.76` points on Charades/ActivityNet/QVHighlights and improves every recall threshold on the first two subsets, so 3D RoPE is harmful there under the active gate-0.5 serial Linear-FW recipe but not uniformly harmful on QVHighlights. v18 reaches only `13.22/7.05/2.92%` mIoU: it modestly beats matched Base video-last on Charades, loses on ActivityNet/QVHighlights, and remains far below the full-visual-token results. Removing 3D RoPE does not solve the final-chunk information bottleneck.
 
 ## v19 - Parallel Linear16 + Delta 3D RoPE, Linear Gate 0, Last-Chunk Token Select
 
