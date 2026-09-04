@@ -679,7 +679,7 @@ Startup validation: all ranks report Linear16+Delta, `lact_3d_rope=1`, `lact_gat
 
 Training completion: v17 finished one epoch at step 114/114 and saved `20260903173458/hf-114`. First/final global CE is `0.8219/0.3939`; first/last-20 mean is `0.5443/0.3885`. Pre-clip grad norm mean/median/max is `0.405/0.201/2.958` with the maximum at step 7; no NaN, invalid norm, skipped update, traceback, or OOM appears. Rank-0 stable step median excluding step 1 is `213.24s`; maximum allocated/reserved memory is `75.89/77.03 GB`.
 
-Checkpoint inspection `20260903173458/checkpoint_inspection.json` reconstructs the seed-42 Linear16+Delta+3D-RoPE initialization with gate 0.5. All 31,104 gates remain bitwise exactly `0.5` because BF16 updates at this magnitude are below the parameter quantization interval. FW beta/private/value relative L2 deltas are `141.55%/0.881%/0.789%`, projector delta is `1.063%`, FW memory norm and original ViT/LM remain bitwise unchanged.
+Checkpoint inspection `20260903173458/checkpoint_inspection.json` reconstructs the seed-42 Linear16+Delta+3D-RoPE initialization with gate 0.5. The step-114 DCP FP32 master gates do learn: 31,101/31,104 values change, delta RMS/mean-absolute/max-absolute is `1.76e-4/1.45e-4/6.39e-4`, and all Adam first moments are nonzero. Their range `0.499426-0.500639` still rounds entirely to `0.5` in BF16, whose adjacent values are `0.498046875` and `0.50390625`; FSDP mixed-precision forward and the BF16 HF export therefore use an effectively fixed 0.5 gate. FW beta/private/value relative L2 deltas are `141.55%/0.881%/0.789%`, projector delta is `1.063%`, FW memory norm and original ViT/LM remain bitwise unchanged.
 
 ### TimeLens-Bench Native Evaluation
 
