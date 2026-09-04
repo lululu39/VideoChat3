@@ -825,7 +825,7 @@ Diagnostic conclusion: gate 0.5 immediately changes the parallel branch before a
 
 ## v23 - Parallel Linear16 + Delta 3D RoPE, Per-Chunk Query Output
 
-**Status:** Active on eight H100s from a clean initialization; no prior experiment checkpoint is reused.
+**Status:** Training completed at step 413/413; checkpoint diagnostics are complete and native TimeLens-Bench evaluation is pending.
 
 - Objective: replace final-chunk-only spatial output with one learned summary query per existing four-frame chunk, restoring a direct LM supervision path for every chunk while compressing each chunk to one visual token.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; Linear16 private Q/K/V/O uses deterministic attention share-init, recurrent state and linear gates start at zero, and one shared learned query is initialized with truncated normal standard deviation `0.02` and replicated at the end of every chunk.
@@ -840,5 +840,15 @@ Diagnostic conclusion: gate 0.5 immediately changes the parallel branch before a
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-chunkquery-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v23/<timestamp>/hf-413`.
 
 Startup validation: the query-aware tokenizer builds 6,593 packs / 413 steps with no placeholder mismatch. FSDP reports one uniform `143.0M` LACT-FW group containing non-gate FW, gates, and the shared query, plus the `33.0M` projector group; both use the same cosine schedule. Steps 1-3 have CE `0.74472/0.73713/0.69437`, finite pre-clip norms `1.1265/1.2061/1.1344`, and expected warmup LRs `0/1.6667e-6/3.3333e-6`. Stable steps take about 13 seconds and initial maximum allocated memory is `19.21 GB`; there is no OOM, invalid norm, skipped update, traceback, or placeholder mismatch. Active run directory `20260904201129`; native log `torchrun_logs/training_20260904_201111_datava270000004.log`.
+
+Training completion: v23 finished one epoch at step 413/413 in `5,869.51s` and saved `20260904201129/hf-413`. First/final global CE is `0.7447/0.3518`; first/last-20 mean is `0.6012/0.3721`. Pre-clip grad norm mean/median/max is `0.672/0.585/2.534`, with the maximum at step 277; no nonfinite norm, skipped update, traceback, OOM, or placeholder mismatch appears. Stable rank-0 step median excluding step 1 is `13.72s`; maximum allocated/reserved memory is `16.20/17.90 GB`.
+
+Checkpoint inspection confirms that all 31,104 BF16-exported gates move from zero, with RMS/mean-absolute/max-absolute `3.29e-4/2.62e-4/1.58e-3`. FW private/value relative L2 deltas are `1.03%/1.11%`, projector delta is `1.71%`, the trained 1,152-element shared query has RMS `0.01968`, and FW memory norm plus original attention/MLP/other ViT and 4B LM remain bitwise unchanged.
+
+### TimeLens-Bench Native Evaluation
+
+**Status:** Launch pending. Fixed native generation/scoring protocol matches v17-v19: all 9,404 queries, 2 FPS, up to 448 frames, 224px/14,680,064-total-pixel budget, official R1@0.3/0.5/0.7 and mIoU.
+
+Config: `vlmevalkit-videochat3/configs/videochat3_v23_timelens_bench.json`; launcher: `scripts/eval_videochat3_v23_timelens_bench.sh`; expected artifact root: `/mnt/localssd/VideoChat3/eval/videochat3-v23-timelens-bench`.
 
 Startup validation: FSDP reports the intended `143.0M` non-gate FW, `0.031M` gate, and `33.0M` projector groups with peak LRs `2e-5/2e-3/2e-5`. With all step-1 LRs still zero, the active 0.5 gate changes CE/grad norm from v21's `0.800191/1.32405` to `0.785189/2.38221`, isolating a favorable initialization effect. Step 2 is `0.771898/2.53422` at group LRs `6.6667e-6/6.6667e-4/6.6667e-6`; after that first high-gate-LR update, step 3 remains finite at `0.764866/2.90198`, versus matched v21 `0.784753/1.44137`. There is no OOM, invalid norm, skipped update, or traceback. Active run directory `20260904184242`; native log `torchrun_logs/training_20260904_184225_datava270000004.log`.
