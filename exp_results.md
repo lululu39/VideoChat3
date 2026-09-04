@@ -787,7 +787,7 @@ Diagnostic conclusion: v20 held both live groups at exactly `2e-5` from step 4 t
 
 ## v21 - Parallel Linear16 + Delta 3D RoPE, Zero Gate, 100x Gate LR
 
-**Status:** Launch pending from a clean initialization; no v19/v20 checkpoint is reused.
+**Status:** Active on eight H100s from a clean initialization; no v19/v20 checkpoint is reused.
 
 - Objective: test whether v19's memory gate is learning-rate limited by repeating v19 with a 100x gate-only outer LR as the sole model-optimization change.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; identical deterministic Linear16 attention-share initialization, zero linear state, and zero linear memory gate as v19.
@@ -800,3 +800,5 @@ Diagnostic conclusion: v20 held both live groups at exactly `2e-5` from step 4 t
 - Training W&B: [`v21`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-gatelr2e3-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v21).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_GATELR100X_LASTCHUNK_FWProj_train_timelens_v21.sh`.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-gatelr2e3-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v21/<timestamp>/hf-114`.
+
+Startup validation: FSDP reports `143.0M` non-gate Linear-FW, `0.031M` gate, and `33.0M` projector parameters in three optimizer groups. Steps 1-3 use FW/gate/projector LRs `0/0/0`, `6.6667e-6/6.6667e-4/6.6667e-6`, and `1.3333e-5/1.3333e-3/1.3333e-5`, confirming the exact 100x gate ratio. Step 1 reproduces v19 CE/grad norm at `0.800191/1.32405`; after the first nonzero high-gate-LR update, step 3 remains finite at CE `0.784753` and norm `1.44137`, versus matched v19 `0.786007/1.44315`. There is no OOM, invalid norm, skipped update, or traceback. Active run directory `20260904165951`; native log `torchrun_logs/training_20260904_165933_datava270000004.log`.
