@@ -16,6 +16,8 @@ def load_index(model_dir: Path) -> dict[str, str]:
 
 
 def parameter_group(name: str) -> str:
+    if name.endswith("chunk_query"):
+        return "chunk_query"
     if ".memory_gate" in name:
         return "memory_gate"
     if any(f".memory.{weight}" in name for weight in ("w0", "w1", "w2")):

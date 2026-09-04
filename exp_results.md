@@ -807,7 +807,7 @@ Diagnostic conclusion: through the identical first 27 batches, v21 lowers mean C
 
 ## v22 - Parallel Linear16 + Delta 3D RoPE, Gate 0.5, 100x Gate LR
 
-**Status:** Active on eight H100s from a clean initialization; no prior experiment checkpoint is reused.
+**Status:** Stopped by the user after step 15/114; no checkpoint exists and this run must not be resumed or evaluated.
 
 - Objective: repeat v21 while changing only the linear memory-gate initialization from `0` to `0.5`, testing an active parallel FW branch from the first batch while retaining enough gate LR to cross the BF16 quantization dead zone around 0.5.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; identical deterministic Linear16 private Q/K/V/O attention-share initialization and zero linear state as v21, with every gate deterministically reset to `0.5`.
@@ -820,5 +820,7 @@ Diagnostic conclusion: through the identical first 27 batches, v21 lowers mean C
 - Training W&B: [`v22`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0p5-gatelr2e3-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v22).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE05_GATELR100X_LASTCHUNK_FWProj_train_timelens_v22.sh`.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0p5-gatelr2e3-lastchunk-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v22/<timestamp>/hf-114`.
+
+Diagnostic conclusion: gate 0.5 immediately changes the parallel branch before any optimizer update: step-1 CE/grad norm is `0.78519/2.3822`, versus zero-gate `0.80019/1.3241`. Step 3 remains finite at `0.76487/2.9020` after the first 100x gate-LR update. Through step 15, mean CE is `0.1162` below matched v19, but the last-five advantage shrinks to `0.0674` and step 15 reaches `0.40969/0.1216`; the user judged the trajectory insufficient and stopped it. There is no invalid norm, skipped update, traceback, or OOM.
 
 Startup validation: FSDP reports the intended `143.0M` non-gate FW, `0.031M` gate, and `33.0M` projector groups with peak LRs `2e-5/2e-3/2e-5`. With all step-1 LRs still zero, the active 0.5 gate changes CE/grad norm from v21's `0.800191/1.32405` to `0.785189/2.38221`, isolating a favorable initialization effect. Step 2 is `0.771898/2.53422` at group LRs `6.6667e-6/6.6667e-4/6.6667e-6`; after that first high-gate-LR update, step 3 remains finite at `0.764866/2.90198`, versus matched v21 `0.784753/1.44137`. There is no OOM, invalid norm, skipped update, or traceback. Active run directory `20260904184242`; native log `torchrun_logs/training_20260904_184225_datava270000004.log`.

@@ -53,6 +53,9 @@ macro_temporal_compression_mode = os.getenv(
 )
 model_variant = os.getenv("VIDEOCHAT3_MODEL_VARIANT", "lact")
 train_projector = env_bool("VIDEOCHAT3_TRAIN_PROJECTOR")
+lact_chunk_query = model_variant == "lact" and env_bool(
+    "VIDEOCHAT3_LACT_CHUNK_QUERY"
+)
 
 if model_variant == "lact":
     model_cfg = VideoChat3LACTDense4BConfig(
@@ -66,6 +69,7 @@ if model_variant == "lact":
             inner_optim=os.getenv("VIDEOCHAT3_INNER_OPTIM", "muon"),
             fw_order=os.getenv("VIDEOCHAT3_FW_ORDER", "serial"),
             lact_3d_rope=env_bool("VIDEOCHAT3_LACT_3D_ROPE"),
+            lact_chunk_query=lact_chunk_query,
             lact_gate=os.getenv("VIDEOCHAT3_LACT_GATE", "linear"),
             lact_gate_init=float(os.getenv("VIDEOCHAT3_LACT_GATE_INIT", "0")),
             clip_ns_grad_ratio=False,
@@ -176,6 +180,7 @@ for name, data in dataset_collections.items():
                 video_frame_multiple=data.get("video_frame_multiple", 1),
                 macro_temporal_compression_factor=macro_temporal_compression_factor,
                 macro_temporal_compression_mode=macro_temporal_compression_mode,
+                lact_chunk_query=lact_chunk_query,
                 processor_path=str(model_path),
                 data_augment=data.get("data_augment", False),
                 system_message=data.get("system_message"),

@@ -21,6 +21,9 @@ from xtuner.v1.model.compose.videochat3.macro_temporal import (  # noqa: E402
 from xtuner.v1.model.compose.videochat3.hf_macro_export import (  # noqa: E402
     export_macro_hf_artifacts,
 )
+from xtuner.v1.datasets.mllm_tokenize_fn.videochat3_tokenize_fn import (  # noqa: E402
+    VideoChat3TokenizeFunction,
+)
 
 
 def test_video_last_keeps_one_final_chunk_per_video():
@@ -58,6 +61,14 @@ def test_existing_auto_modes_preserve_base_and_lact_defaults():
     assert resolve_macro_temporal_compression_mode("auto", default="select_last") == "select_last"
     assert compress_timestamps(timestamps, 4) == [2.0, 4.5]
     assert compress_timestamps(timestamps, 4, mode="select_last") == [3.5, 4.5]
+
+
+def test_chunk_query_uses_one_placeholder_per_existing_four_frame_chunk():
+    tokenize_fn = VideoChat3TokenizeFunction.__new__(VideoChat3TokenizeFunction)
+    tokenize_fn.lact_chunk_query = True
+    tokenize_fn.video_processor = SimpleNamespace(temporal_merge_size=4)
+
+    assert tokenize_fn._get_number_of_video_tokens((9, 16, 16)) == 3
 
 
 def test_base_macro_export_records_video_last_mode(tmp_path):

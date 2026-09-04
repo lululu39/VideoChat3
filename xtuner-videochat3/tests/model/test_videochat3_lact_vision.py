@@ -11,6 +11,7 @@ from xtuner.v1.model.compose.videochat3.modeling_vision_lact import (
     _CaptureNextStateGradient,
     _StateGradRatioContext,
     build_lact_3d_rope_freqs,
+    interleave_identity_rope_for_chunk_queries,
     zeropower_via_newtonschulz5,
 )
 from xtuner.v1.model.compose.videochat3.videochat3_config import (
@@ -395,6 +396,72 @@ def test_lact_3d_rope_uses_global_frame_positions_and_resets_between_videos():
     assert not torch.equal(freqs[0, 4:], freqs[1, 4:])
 
 
+def test_chunk_query_uses_identity_rope_without_changing_patch_positions():
+    freqs = torch.polar(torch.ones(5, 4), torch.randn(5, 4))
+    packed = interleave_identity_rope_for_chunk_queries(freqs, [2, 3])
+
+    assert packed.shape == (7, 4)
+    torch.testing.assert_close(packed[[0, 1, 3, 4, 5]], freqs)
+    torch.testing.assert_close(packed[[2, 6]], torch.ones(2, 4, dtype=freqs.dtype))
+
+
+def test_chunk_query_returns_one_trainable_summary_per_chunk():
+    torch.manual_seed(29)
+    model = VideoChat3LACTVisionConfig(
+        **_vision_kwargs(),
+        memory_type="linear",
+        inner_optim="delta",
+        fw_num_heads=4,
+        fw_muon_update_steps=0,
+        fw_order="parallel",
+        lact_3d_rope=True,
+        lact_chunk_query=True,
+    ).build()
+    model.init_weights()
+
+    outputs = model(
+        torch.randn(32, 12),
+        torch.tensor([[8, 2, 2]], dtype=torch.int32),
+    )
+
+    assert len(outputs) == 2
+    assert all(output.shape == (1, 4, 16) for output in outputs)
+    torch.cat(outputs).square().mean().backward()
+    assert model.chunk_query.grad is not None
+    assert torch.count_nonzero(model.chunk_query.grad).item() > 0
+
+
+def test_chunk_query_reads_memory_but_is_excluded_from_linear_state_writes():
+    model = VideoChat3LACTVisionConfig(
+        **_vision_kwargs(),
+        memory_type="linear",
+        inner_optim="delta",
+        fw_num_heads=4,
+        lact_chunk_query=True,
+    ).build()
+    block = model.encoder.blocks[0]
+    update_lengths = []
+    original_update = block.memory.update_projected
+
+    def record_update(key, target, learning_rates, state, muon_update_steps):
+        update_lengths.append(key.shape[1])
+        return original_update(
+            key,
+            target,
+            learning_rates,
+            state,
+            muon_update_steps,
+        )
+
+    block.memory.update_projected = record_update
+    block._forward_linear_memory_scan(
+        torch.randn(10, 16),
+        clip_slices=[(0, 5), (5, 10)],
+        video_clip_counts=[2],
+    )
+    assert update_lengths == [4]
+
+
 def test_lact_3d_rope_changes_fast_memory_without_changing_chunk_compression():
     torch.manual_seed(19)
     without_rope = VideoChat3LACTVisionConfig(
@@ -564,6 +631,7 @@ def test_lact_config_builds_separate_vision_model():
     assert config.clip_ns_grad_ratio is False
     assert config.clip_state_grad_ratio is True
     assert config.lact_3d_rope is False
+    assert config.lact_chunk_query is False
     assert config.fw_order == "serial"
     assert config.lact_gate == "linear"
     assert config.lact_gate_init == 0.0
@@ -572,6 +640,13 @@ def test_lact_config_builds_separate_vision_model():
     assert all(block.fw_order == "serial" for block in model.encoder.blocks)
     assert all(block.memory_gate.shape == (16,) for block in model.encoder.blocks)
     assert all(torch.count_nonzero(block.memory_gate).item() == 0 for block in model.encoder.blocks)
+
+    chunk_query_model = VideoChat3LACTVisionConfig(
+        **_vision_kwargs(),
+        lact_chunk_query=True,
+    ).build()
+    assert chunk_query_model.chunk_query.shape == (16,)
+    assert chunk_query_model._is_lact_state_key("chunk_query")
 
     parallel_model = VideoChat3LACTVisionConfig(
         **_vision_kwargs(),

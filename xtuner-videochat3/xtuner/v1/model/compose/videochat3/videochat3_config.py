@@ -82,6 +82,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
     fw_update_layer_group_size: int = 1
     lact_inference_state_mode: Literal["continuous", "reset_state"] = "continuous"
     lact_3d_rope: bool = False
+    lact_chunk_query: bool = False
     lact_gate: Literal["linear", "tanh"] = "linear"
     lact_gate_init: float = 0.0
 
@@ -123,6 +124,14 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
         if self.memory_type == "linear" and self.fw_update_layer_group_size != 1:
             raise ValueError(
                 "linear memory currently requires fw_update_layer_group_size=1"
+            )
+        if self.lact_chunk_query and (
+            self.macro_temporal_compression_factor != 1
+            or self.macro_temporal_compression_mode != "auto"
+        ):
+            raise ValueError(
+                "lact_chunk_query requires macro temporal compression factor 1 "
+                "and mode 'auto'"
             )
 
     def build(self):

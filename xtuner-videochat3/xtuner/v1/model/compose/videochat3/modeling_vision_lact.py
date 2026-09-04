@@ -100,6 +100,55 @@ def _video_clip_offsets(video_clip_counts: list[int]):
         offset += count
 
 
+def interleave_chunk_query_tokens(
+    hidden_states: torch.Tensor,
+    patch_lengths: list[int],
+    chunk_query: torch.Tensor,
+) -> tuple[torch.Tensor, list[int]]:
+    """Append one shared learned query after every packed chunk."""
+    if sum(patch_lengths) != hidden_states.shape[0]:
+        raise ValueError(
+            f"patch_lengths={patch_lengths} do not cover {hidden_states.shape[0]} tokens"
+        )
+    outputs = []
+    query_indices = []
+    patch_offset = 0
+    packed_offset = 0
+    for length in patch_lengths:
+        if length <= 0:
+            raise ValueError(f"patch length must be positive, got {length}")
+        outputs.append(hidden_states[patch_offset : patch_offset + length])
+        outputs.append(chunk_query.reshape(1, -1))
+        query_indices.append(packed_offset + length)
+        patch_offset += length
+        packed_offset += length + 1
+    return torch.cat(outputs, dim=0), query_indices
+
+
+def interleave_identity_rope_for_chunk_queries(
+    rope_freqs_cis: torch.Tensor,
+    patch_lengths: list[int],
+) -> torch.Tensor:
+    """Give non-spatial chunk queries identity RoPE while preserving patch RoPE."""
+    if sum(patch_lengths) != rope_freqs_cis.shape[0]:
+        raise ValueError(
+            f"patch_lengths={patch_lengths} do not cover {rope_freqs_cis.shape[0]} RoPE rows"
+        )
+    outputs = []
+    offset = 0
+    identity = torch.ones(
+        1,
+        rope_freqs_cis.shape[-1],
+        device=rope_freqs_cis.device,
+        dtype=rope_freqs_cis.dtype,
+    )
+    for length in patch_lengths:
+        outputs.append(rope_freqs_cis[offset : offset + length])
+        outputs.append(identity)
+        offset += length
+    return torch.cat(outputs, dim=0)
+
+
 def inverse_softplus(value: float) -> float:
     return value + math.log(-math.expm1(-value))
 
@@ -782,6 +831,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         clip_state_grad_ratio: bool = True,
         lact_inference_state_mode: str = "continuous",
         lact_3d_rope: bool = False,
+        lact_chunk_query: bool = False,
         lact_gate: str = "linear",
         lact_gate_init: float = 0.0,
     ):
@@ -815,6 +865,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         self.fw_order = fw_order
         self.clip_state_grad_ratio = clip_state_grad_ratio
         self.lact_3d_rope = lact_3d_rope
+        self.lact_chunk_query = lact_chunk_query
         if lact_gate not in ("linear", "tanh"):
             raise ValueError(f"lact_gate must be 'linear' or 'tanh', got {lact_gate!r}")
         self.lact_gate = lact_gate
@@ -901,6 +952,13 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         if self.lact_gate == "tanh":
             return torch.tanh(self.memory_gate)
         return self.memory_gate
+
+    def _exclude_chunk_query_from_update(self, memory_input, key, target):
+        if not self.lact_chunk_query:
+            return memory_input, key, target
+        if memory_input.shape[1] <= 1:
+            raise ValueError("A chunk query must follow at least one patch token")
+        return memory_input[:, :-1], key[:, :-1], target[:, :-1]
 
     def _apply_lact_3d_rope(
         self,
@@ -1184,10 +1242,11 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                     group_state,
                 )
                 if will_update:
+                    update_end = end - int(self.lact_chunk_query)
                     state = self.memory.update_projected(
-                        packed_key[:, start:end].to(group_state.dtype),
-                        packed_target[:, start:end],
-                        packed_learning_rates[:, start:end],
+                        packed_key[:, start:update_end].to(group_state.dtype),
+                        packed_target[:, start:update_end],
+                        packed_learning_rates[:, start:update_end],
                         group_state,
                         self.muon_update_steps,
                     )
@@ -1285,6 +1344,11 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                     add_residual=add_residual,
                 )
                 if will_update:
+                    memory_input, key, target = self._exclude_chunk_query_from_update(
+                        memory_input,
+                        key,
+                        target,
+                    )
                     fast_weights, master_weights = self.update_fast_weights_chunk(
                         memory_input,
                         key,
@@ -1331,6 +1395,11 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             (fast_w0, fast_w1, fast_w2),
             lact_rope_freqs_cis,
             add_residual=self.fw_order == "serial",
+        )
+        memory_input, key, target = self._exclude_chunk_query_from_update(
+            memory_input,
+            key,
+            target,
         )
         if self.fw_order == "parallel":
             hidden_states = hidden_states + memory_result.squeeze(0)
@@ -1415,6 +1484,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         block_cfg: dict,
         fw_update_layer_group_size: int = 1,
         lact_3d_rope: bool = False,
+        lact_chunk_query: bool = False,
     ):
         super().__init__()
         from .modeling_vision import Rope2DPosEmb
@@ -1423,6 +1493,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         self.blocks = nn.ModuleList([VideoChat3LACTVisionLayer(**block_cfg) for _ in range(num_layers)])
         self.final_layernorm = nn.LayerNorm(hidden_dim)
         self.lact_3d_rope = lact_3d_rope
+        self.lact_chunk_query = lact_chunk_query
         self.fw_update_layer_group_size = int(fw_update_layer_group_size)
         if self.fw_update_layer_group_size <= 0:
             raise ValueError("fw_update_layer_group_size must be positive")
@@ -1752,6 +1823,17 @@ class VideoChat3LACTVisionEncoder(nn.Module):
                 self.blocks[0].hidden_size_per_attention_head,
             )
         lengths = (grid_thws[:, 0] * grid_thws[:, 1] * grid_thws[:, 2]).tolist()
+        if self.lact_chunk_query:
+            rope_freqs_cis = interleave_identity_rope_for_chunk_queries(
+                rope_freqs_cis,
+                lengths,
+            )
+            if lact_rope_freqs_cis is not None:
+                lact_rope_freqs_cis = interleave_identity_rope_for_chunk_queries(
+                    lact_rope_freqs_cis,
+                    lengths,
+                )
+            lengths = [int(length) + 1 for length in lengths]
         offsets = [0]
         for length in lengths:
             offsets.append(offsets[-1] + int(length))
@@ -1799,6 +1881,7 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
             num_layers=config.num_hidden_layers,
             fw_update_layer_group_size=config.fw_update_layer_group_size,
             lact_3d_rope=config.lact_3d_rope,
+            lact_chunk_query=config.lact_chunk_query,
             block_cfg={
                 "num_heads": config.num_attention_heads,
                 "hidden_dim": config.hidden_size,
@@ -1821,9 +1904,15 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
                 "clip_state_grad_ratio": config.clip_state_grad_ratio,
                 "lact_inference_state_mode": config.lact_inference_state_mode,
                 "lact_3d_rope": config.lact_3d_rope,
+                "lact_chunk_query": config.lact_chunk_query,
                 "lact_gate": config.lact_gate,
                 "lact_gate_init": config.lact_gate_init,
             },
+        )
+        self.chunk_query = (
+            nn.Parameter(torch.empty(config.hidden_size))
+            if config.lact_chunk_query
+            else None
         )
         self._hf_prefix = "model.vision_tower."
         self._init_load_spec()
@@ -1840,7 +1929,7 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
                 ".beta_proj.",
                 ".value_proj.",
             )
-        )
+        ) or key == "chunk_query"
 
     def _lact_local_keys(self) -> set[str]:
         return {key for key in self.state_dict() if self._is_lact_state_key(key)}
@@ -1852,6 +1941,8 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
     def reset_lact_parameters(self) -> None:
         for block in self.encoder.blocks:
             block.reset_lact_parameters()
+        if self.chunk_query is not None:
+            nn.init.trunc_normal_(self.chunk_query, std=0.02)
 
     @torch.no_grad()
     @override
@@ -1867,6 +1958,13 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
         loaded, unloaded, missing = super().from_hf(hf_path, strict=False)
         lact_hf_keys = self._lact_hf_keys()
         missing_lact = missing & lact_hf_keys
+        query_local_keys = {key for key in self._lact_local_keys() if key == "chunk_query"}
+        query_hf_keys = {
+            hf_key
+            for key in query_local_keys
+            for hf_key in self.to_hf_key_list(key)
+        }
+        missing_memory_lact = missing_lact - query_hf_keys
         if self.config.memory_type == "linear":
             # A linear-memory model may initialize from either the Base or a
             # SwiGLU-LACT checkpoint. Always rebuild its complete private
@@ -1880,12 +1978,16 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
                 )
             unloaded = unloaded - self._lact_local_keys()
             return loaded, unloaded, missing_base
-        if missing_lact:
-            if missing_lact != lact_hf_keys:
+        if missing_memory_lact:
+            memory_lact_hf_keys = lact_hf_keys - query_hf_keys
+            if missing_memory_lact != memory_lact_hf_keys:
                 raise RuntimeError(
-                    f"Checkpoint contains only a partial VideoChat3 LACT memory state: missing={sorted(missing_lact)}"
+                    "Checkpoint contains only a partial VideoChat3 LACT memory "
+                    f"state: missing={sorted(missing_memory_lact)}"
                 )
             self.reset_lact_parameters()
+        elif missing_lact and self.chunk_query is not None:
+            nn.init.trunc_normal_(self.chunk_query, std=0.02)
         missing_base = missing - lact_hf_keys
         if strict and missing_base:
             raise RuntimeError(f"Missing baseline vision parameters: {sorted(missing_base)}")
@@ -1924,7 +2026,27 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
         if expected_tokens != actual_tokens:
             raise ValueError(f"Split grid changed token count: {expected_tokens} != {actual_tokens}")
         hidden_states = self.patch_embed(pixel_values, split_grid_thws)
+        query_indices = None
+        if self.chunk_query is not None:
+            patch_lengths = (
+                split_grid_thws[:, 0]
+                * split_grid_thws[:, 1]
+                * split_grid_thws[:, 2]
+            ).tolist()
+            hidden_states, query_indices = interleave_chunk_query_tokens(
+                hidden_states,
+                patch_lengths,
+                self.chunk_query,
+            )
         hidden_states = self.encoder(hidden_states, split_grid_thws, video_clip_counts)
+        if query_indices is not None:
+            merge_area = math.prod(self.config.merge_kernel_size)
+            return [
+                hidden_states[index]
+                .reshape(1, 1, -1)
+                .expand(1, merge_area, -1)
+                for index in query_indices
+            ]
         chunk_outputs = patch_merger(
             hidden_states,
             split_grid_thws,

@@ -61,6 +61,7 @@ def export_lact_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
         "fw_update_layer_group_size",
         "lact_inference_state_mode",
         "lact_3d_rope",
+        "lact_chunk_query",
         "lact_gate",
         "lact_gate_init",
     )
@@ -97,6 +98,7 @@ def export_lact_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
     processor_config["macro_temporal_compression_mode"] = (
         vision_config.macro_temporal_compression_mode
     )
+    processor_config["lact_chunk_query"] = vision_config.lact_chunk_query
     processor_config.setdefault("auto_map", {})["AutoProcessor"] = (
         "processing_videochat3_lact.VideoChat3LACTProcessor"
     )

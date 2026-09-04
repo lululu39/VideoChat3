@@ -39,6 +39,7 @@ def _tiny_model_config():
         fw_muon_update_steps=0,
         fw_order="parallel",
         lact_3d_rope=True,
+        lact_chunk_query=True,
         lact_gate="tanh",
         lact_gate_init=0.5,
     )
@@ -195,9 +196,12 @@ def test_hf_interval_save_loads_independent_lact_model(tmp_path):
     assert saved_config["vision_config"]["clip_state_grad_ratio"] is True
     assert saved_config["vision_config"]["macro_temporal_compression_mode"] == "auto"
     assert saved_config["vision_config"]["lact_3d_rope"] is True
+    assert saved_config["vision_config"]["lact_chunk_query"] is True
     assert saved_config["vision_config"]["fw_order"] == "parallel"
     assert saved_config["vision_config"]["lact_gate"] == "tanh"
     assert saved_config["vision_config"]["lact_gate_init"] == 0.5
+    saved_processor = json.loads((save_path / "processor_config.json").read_text())
+    assert saved_processor["lact_chunk_query"] is True
     assert saved_config["architectures"] == ["VideoChat3LACTForConditionalGeneration"]
     assert saved_config["auto_map"]["AutoModelForCausalLM"] == (
         "modeling_videochat3_lact.VideoChat3LACTForConditionalGeneration"
@@ -213,6 +217,7 @@ def test_hf_interval_save_loads_independent_lact_model(tmp_path):
     assert hf_config.vision_config.clip_state_grad_ratio is True
     assert hf_config.vision_config.macro_temporal_compression_mode == "auto"
     assert hf_config.vision_config.lact_3d_rope is True
+    assert hf_config.vision_config.lact_chunk_query is True
     assert hf_config.vision_config.fw_order == "parallel"
     assert hf_config.vision_config.lact_gate == "tanh"
     assert hf_config.vision_config.lact_gate_init == 0.5
@@ -227,6 +232,7 @@ def test_hf_interval_save_loads_independent_lact_model(tmp_path):
     assert not loading_info["mismatched_keys"]
     assert type(hf_model).__name__ == "VideoChat3LACTForConditionalGeneration"
     assert type(hf_model.model.vision_tower).__name__ == ("VideoChat3LACTVisionModel")
+    assert hf_model.model.vision_tower.chunk_query.shape == (16,)
     image_text_model = AutoModelForImageTextToText.from_pretrained(
         save_path,
         trust_remote_code=True,
@@ -266,6 +272,8 @@ def test_hf_interval_save_loads_independent_lact_model(tmp_path):
     grid_thws = torch.tensor([[8, 2, 2]], dtype=torch.int32)
     hf_outputs = hf_model.model.vision_tower(pixel_values, grid_thws)
     resumed_outputs = resumed_model.vision_tower(pixel_values, grid_thws)
+    projected_outputs = resumed_model.multi_modal_projector(resumed_outputs)
+    assert projected_outputs.shape == (2, 32)
     for hf_output, resumed_output in zip(hf_outputs, resumed_outputs, strict=True):
         torch.testing.assert_close(
             hf_output,
