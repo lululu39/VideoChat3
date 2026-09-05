@@ -900,7 +900,7 @@ Conclusion: increasing v23's one query per chunk to a Base-R4-sized token budget
 
 ## v25 - Serial Linear16 + Delta 3D RoPE, Base-R4-Budget Per-Chunk Queries
 
-**Status:** Training completed at step 276/276; checkpoint diagnostics are complete and native TimeLens-Bench evaluation is pending.
+**Status:** Training completed at step 276/276; checkpoint diagnostics and native TimeLens-Bench evaluation are complete.
 
 - Objective: isolate FW block topology by repeating v24 with `fw_order="serial"` as the only model/training change; attention consumes the layer input first and the private FW branch consumes the post-attention hidden state.
 - Initialization: identical to v24, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private projections, zero recurrent state/gates, and the same 16-slot truncated-normal query bank initialization.
@@ -920,3 +920,17 @@ Startup validation: all ranks report the intended serial Linear16+Delta topology
 Training completion: v25 finished in `11,003.63s` and saved `20260905055511/hf-276`. First/final CE is `0.7541/0.3609`; first/last-20 mean is `0.5651/0.3653`, effectively identical to v24's `0.5650/0.3652`. Pre-clip grad norm mean/median/max is `4.910/4.069/32.316`, versus v24's `3.750/2.758/46.042`; all 276 values are finite. Maximum allocated/reserved memory is `27.45/29.88 GB`.
 
 Checkpoint inspection `20260905055511/checkpoint_inspection.json` compares against the same configured initialization as v24. Gate RMS/mean-absolute/max-absolute is `2.90e-4/2.27e-4/1.39e-3`; FW private/value relative L2 deltas are `0.677%/0.812%`, projector delta is `1.320%`, trained query-bank RMS is `0.01995`, and beta RMS is `0.02001`. Original attention, original MLP, other original vision parameters, the FW memory norm, and 4B LM remain bitwise unchanged.
+
+### TimeLens-Bench Native Evaluation
+
+**Status:** Completed on all 9,404 queries with no missing predictions. Fixed native generation/scoring protocol is identical to v24 and Base R4: 2 FPS, up to 448 frames, 224px/14,680,064-total-pixel budget.
+
+| Subset | Base R4 R1@0.3 | v25 R1@0.3 | Delta | Base R1@0.5 | v25 R1@0.5 | Delta | Base R1@0.7 | v25 R1@0.7 | Delta | Base mIoU | v25 mIoU | Delta |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Charades-TimeLens | `46.57%` | `23.58%` | `-22.99` | `31.46%` | `14.72%` | `-16.74` | `13.92%` | `5.59%` | `-8.33` | `31.48%` | `15.90%` | `-15.58` |
+| ActivityNet-TimeLens | `46.20%` | `15.71%` | `-30.49` | `34.42%` | `11.20%` | `-23.22` | `21.20%` | `6.60%` | `-14.60` | `33.59%` | `12.21%` | `-21.38` |
+| QVHighlights-TimeLens | `67.10%` | `8.83%` | `-58.27` | `54.57%` | `5.19%` | `-49.38` | `38.87%` | `3.37%` | `-35.50` | `50.42%` | `7.85%` | `-42.57` |
+
+Config: `vlmevalkit-videochat3/configs/videochat3_v25_timelens_bench.json`; launcher: `scripts/eval_videochat3_v25_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v25-timelens-bench/VideoChat3-4B-LACT-v25/T20260905_Gb8e6997c`.
+
+Conclusion: serial changes mIoU relative to matched parallel v24 by `+0.30/+0.91/+0.07` points on Charades/ActivityNet/QVHighlights. It improves all Charades and ActivityNet recall thresholds but changes QVHighlights by `-0.06/-0.97/+0.00`; the gain is small and not uniform. Training CE is nearly identical, and neither topology closes the large gap to Base R4. Equal LM token count alone is insufficient: learned query pooling remains the dominant information bottleneck, while serial versus parallel FW order is secondary under the near-zero learned gate.
