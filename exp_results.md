@@ -1009,7 +1009,7 @@ Conclusion: Base+query without FW fails despite jointly training ViT/query/proje
 
 ## v28 - Serial Base-R4-Budget Queries, Train ViT + FW + Projector
 
-**Status:** Clean restart prepared; training is pending.
+**Status:** Clean restart active at step 3/276 on public W&B; startup validation is complete.
 
 - Objective: isolate FW block topology under successful joint adaptation by repeating v26 with `fw_order="serial"` as the only model/training change; compare against v26 parallel and the FW-only v24/v25 topology pair.
 - Initialization: identical to v26, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state/gates, and the same seed-42 16-slot truncated-normal query bank initialization.
@@ -1021,6 +1021,8 @@ Conclusion: Base+query without FW fails despite jointly training ViT/query/proje
 - Hardware/batch/sequence: identical to v26, 8xH100 ordinary FSDP, global batch 16, 4K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, 4,401 packs, and 276 optimizer steps.
 - Training W&B: [`v28`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-serial-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-clean-v28).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_SERIAL_GATE0_R4QUERY_VITFWPROJ_train_timelens_v28.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-serial-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-clean-v28/<timestamp>/hf-276`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-serial-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-clean-v28/20260905234613/hf-276`.
 
 The first launch was stopped after step 2 with no checkpoint: the new Base-query parent loader incorrectly consumed one extra LACT query initialization before the normal Linear reset, so step-1 CE failed to reproduce v26 despite the zero gate. The loader now restricts that initialization to `config.chunk_query=True`; the clean run uses a fresh W&B/run directory and must reproduce v26 step-1 CE exactly before it is accepted.
+
+Clean startup validation: step-1 CE exactly reproduces v26 at `0.75414109`, proving identical data, Base/query forward, and initialization under the zero gate. Serial/parallel step-1 pre-clip norms are `12.9409/13.0132`, reflecting only the topology-dependent gate derivative. Steps 2-3 remain finite at CE `0.71291/0.75585`, norms `17.5538/9.5524`, and equal ViT/FW/projector LRs `2.5e-6/5e-6`. FSDP reports the intended `416.9M` ViT, `143.9M` LACT-added, and `33.0M` projector groups; maximum observed allocation/reservation is `28.55/31.00 GB`. Active run directory `20260905234613`; native log `torchrun_logs/training_20260905_234556_datava270000004.log`.
