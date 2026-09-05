@@ -900,7 +900,7 @@ Conclusion: increasing v23's one query per chunk to a Base-R4-sized token budget
 
 ## v25 - Serial Linear16 + Delta 3D RoPE, Base-R4-Budget Per-Chunk Queries
 
-**Status:** Launcher prepared; waits for v24 training and evaluation to finish.
+**Status:** Active at step 3/276 on public W&B; startup validation is complete.
 
 - Objective: isolate FW block topology by repeating v24 with `fw_order="serial"` as the only model/training change; attention consumes the layer input first and the private FW branch consumes the post-attention hidden state.
 - Initialization: identical to v24, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private projections, zero recurrent state/gates, and the same 16-slot truncated-normal query bank initialization.
@@ -913,4 +913,6 @@ Conclusion: increasing v23's one query per chunk to a Base-R4-sized token budget
 - Hardware/batch/sequence: identical to v24, 8xH100 ordinary FSDP, global batch 16, 4K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, 4,401 packs, and 276 optimizer steps.
 - Training W&B: [`v25`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-serial-gate0-r4query-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v25).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_SERIAL_GATE0_R4QUERY_train_timelens_v25.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-serial-gate0-r4query-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v25/<timestamp>/hf-276`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-serial-gate0-r4query-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v25/20260905055511/hf-276`.
+
+Startup validation: all ranks report the intended serial Linear16+Delta topology, `lact_chunk_query_mode=spatial_quarter`, fast-Q/K 3D RoPE, zero linear gate, 4K limits, and uniform FW/query/gate/projector LR. It reuses v24's 4,401 packs / 276 steps. Because the gate is still exactly zero, step-1 CE exactly matches v24 at `0.754141`; the serial/parallel pre-clip norms are `5.8482/5.8636`. Steps 2-3 remain finite at CE `0.71291/0.75670` and norms `8.9625/5.0397`, with equal group LRs `2.5e-6/5e-6`. Maximum observed allocation is `27.25 GB`; no OOM, invalid norm, skipped update, or placeholder mismatch occurs. Active run directory `20260905055511`; native log `torchrun_logs/training_20260905_055453_datava270000004.log`.
