@@ -937,7 +937,7 @@ Conclusion: serial changes mIoU relative to matched parallel v24 by `+0.30/+0.91
 
 ## v26 - Parallel Base-R4-Budget Queries, Train ViT + FW + Projector
 
-**Status:** Launcher prepared; training is pending.
+**Status:** Active at step 4/276 on public W&B; startup validation is complete.
 
 - Objective: test whether v24's FW-only vision scope suppresses gate learning by repeating v24 while unfreezing the original ViT; train original ViT, all LACT-added parameters including gates/query bank, and projector together.
 - Initialization: identical to v24, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state/gates, and the same seed-42 16-slot truncated-normal query bank initialization.
@@ -949,4 +949,6 @@ Conclusion: serial changes mIoU relative to matched parallel v24 by `+0.30/+0.91
 - Hardware/batch/sequence: identical to v24, 8xH100 ordinary FSDP, global batch 16, 4K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, 4,401 packs, and 276 optimizer steps.
 - Training W&B: [`v26`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v26).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_R4QUERY_VITFWPROJ_train_timelens_v26.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v26/<timestamp>/hf-276`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v26/20260905152729/hf-276`.
+
+Startup validation: FSDP reports `416.9M` original ViT, `143.9M` LACT-added, and `33.0M` projector parameters trainable (`593.8M` total), with the LM frozen; all three optimizer groups use the same warmup/cosine LR. Step 1 exactly matches v24 CE `0.754141` because both gates are initially zero, while opening ViT raises the pre-clip global norm from v24's `5.8636` to `13.0132`. Steps 2-4 remain finite at CE `0.71291/0.75520/0.78926` and norms `17.6052/53.6162/11.0733`; maximum observed allocation/reservation is `29.04/31.00 GB`. There is no OOM, invalid norm, skipped update, or placeholder mismatch. Active run directory `20260905152729`; native log `torchrun_logs/training_20260905_152711_datava270000004.log`.
