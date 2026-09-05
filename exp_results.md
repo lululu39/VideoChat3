@@ -1009,7 +1009,7 @@ Conclusion: Base+query without FW fails despite jointly training ViT/query/proje
 
 ## v28 - Serial Base-R4-Budget Queries, Train ViT + FW + Projector
 
-**Status:** Launcher prepared; training is pending.
+**Status:** Clean restart prepared; training is pending.
 
 - Objective: isolate FW block topology under successful joint adaptation by repeating v26 with `fw_order="serial"` as the only model/training change; compare against v26 parallel and the FW-only v24/v25 topology pair.
 - Initialization: identical to v26, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state/gates, and the same seed-42 16-slot truncated-normal query bank initialization.
@@ -1019,6 +1019,8 @@ Conclusion: Base+query without FW fails despite jointly training ViT/query/proje
 - Optimizer/LR schedule: identical to v26, uniform ViT/FW/query/gate/projector AdamW with 3% warmup and cosine `2e-5 -> 1e-6`, weight decay 0, one epoch, inner Delta write strength `0.01`, and no gate-specific LR.
 - Stabilization: identical to v26, no FW ratio clip or NS5; XTuner global gradient clip 1.0 covers ViT, FW, and projector jointly.
 - Hardware/batch/sequence: identical to v26, 8xH100 ordinary FSDP, global batch 16, 4K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, 4,401 packs, and 276 optimizer steps.
-- Training W&B: [`v28`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-serial-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v28).
+- Training W&B: [`v28`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-serial-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-clean-v28).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_SERIAL_GATE0_R4QUERY_VITFWPROJ_train_timelens_v28.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-serial-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v28/<timestamp>/hf-276`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-serial-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-clean-v28/<timestamp>/hf-276`.
+
+The first launch was stopped after step 2 with no checkpoint: the new Base-query parent loader incorrectly consumed one extra LACT query initialization before the normal Linear reset, so step-1 CE failed to reproduce v26 despite the zero gate. The loader now restricts that initialization to `config.chunk_query=True`; the clean run uses a fresh W&B/run directory and must reproduce v26 step-1 CE exactly before it is accepted.

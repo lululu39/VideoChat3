@@ -829,7 +829,10 @@ class VideoChat3VisionModel(BaseModel):
     @override
     def from_hf(self, hf_path: str | Path, strict: bool = True) -> tuple:
         loaded, unloaded, missing = super().from_hf(hf_path, strict=False)
-        if self.chunk_query is None:
+        # LACT subclasses have their own `lact_chunk_query` parameter and
+        # missing-weight initialization. Do not consume RNG or initialize it
+        # through the Base-only query path.
+        if not self.config.chunk_query:
             if strict and missing:
                 raise RuntimeError(f"Missing Base vision parameters: {sorted(missing)}")
             return loaded, unloaded, missing
