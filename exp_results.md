@@ -876,6 +876,23 @@ Conclusion: one learned query per four-frame chunk consistently improves over bo
 - Hardware/batch/sequence: 8xH100 ordinary FSDP, global batch 16, TimeLens 2 FPS, 64-448 frames, and total-pixel budget 14,680,064. Query-aware estimated lengths are mean/median/p90/p99/max `1105/987/1867/1984/2091`; sample and pack limits therefore increase from v23's 1K to 4K to preserve every query, while all other training settings remain unchanged. The resulting cache has 4,401 packs and 276 optimizer steps.
 - Training W&B: [`v24`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v24).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_R4QUERY_train_timelens_v24.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v24/<timestamp>/hf-<final-step>`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v24/20260905010958/hf-276`.
 
 Startup validation: all ranks report `lact_chunk_query_mode=spatial_quarter`, parallel Linear16+Delta, fast-Q/K 3D RoPE, zero linear gate, 4K sample/pack limits, and uniform FW/query/gate/projector LR. The 12,624 rows pack into 4,401 sequences / 276 steps without placeholder mismatch. Steps 1-3 complete at CE `0.75414/0.71291/0.75475`, finite pre-clip norms `5.8636/8.9761/10.6547`, and equal group LRs `0/2.5e-6/5e-6`; maximum observed allocation is `27.25 GB`. The larger direct visual-token budget raises the initial norm substantially above v23's `1.1265` while remaining finite under global clipping. Active run directory `20260905010958`; native log `torchrun_logs/training_20260905_010940_datava270000004.log`.
+
+## v25 - Serial Linear16 + Delta 3D RoPE, Base-R4-Budget Per-Chunk Queries
+
+**Status:** Launcher prepared; waits for v24 training and evaluation to finish.
+
+- Objective: isolate FW block topology by repeating v24 with `fw_order="serial"` as the only model/training change; attention consumes the layer input first and the private FW branch consumes the post-attention hidden state.
+- Initialization: identical to v24, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private projections, zero recurrent state/gates, and the same 16-slot truncated-normal query bank initialization.
+- Data: identical seed-42 12,624-row TimeLens random-half manifest; reuse v24's exact 4,401-pack query-aware cache to preserve samples and ordering.
+- Trainable scope: identical to v24, all `143,905,536` LACT-added parameters plus all `33,039,616` projector parameters (`176,945,152` total); original ViT and 4B LM frozen.
+- Memory/update: identical Linear16+Delta group-1 continuous state, fast-Q/K 3D RoPE, query read/no-write behavior, identity query RoPE, apply-then-update, and final update skip. Only `fw_order="parallel" -> "serial"` changes.
+- Query budget: identical to v24, `max(1,floor(S/4))` retained queries per chunk; standard 224 resolution produces 16 queries/chunk and matches Base R4 over complete four-chunk groups.
+- Optimizer/LR schedule: identical to v24/v23, uniform FW/query/gate/projector AdamW with 3% warmup and cosine `2e-5 -> 1e-6`, weight decay 0, one epoch, inner Delta write strength `0.01`, and no gate-specific LR.
+- Stabilization: identical to v24, no FW ratio clip or NS5; XTuner global gradient clip 1.0.
+- Hardware/batch/sequence: identical to v24, 8xH100 ordinary FSDP, global batch 16, 4K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, 4,401 packs, and 276 optimizer steps.
+- Training W&B: [`v25`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-serial-gate0-r4query-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v25).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_SERIAL_GATE0_R4QUERY_train_timelens_v25.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-serial-gate0-r4query-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v25/<timestamp>/hf-276`.
