@@ -863,7 +863,7 @@ Conclusion: one learned query per four-frame chunk consistently improves over bo
 
 ## v24 - Parallel Linear16 + Delta 3D RoPE, Base-R4-Budget Per-Chunk Queries
 
-**Status:** Active at step 3/276 on public W&B; startup validation is complete.
+**Status:** Training completed at step 276/276; checkpoint diagnostics and native TimeLens-Bench evaluation are complete.
 
 - Objective: repeat v23 while increasing each chunk from one learned query to one quarter of its post-merger spatial-token count, so every complete four-chunk group presents approximately the same number of LM visual tokens as Base R4 while retaining one independently supervised summary path per original four-frame chunk.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; Linear16 private Q/K/V/O uses deterministic attention share-init, recurrent state and linear gates start at zero, and a 16-slot shared query bank is initialized with truncated normal standard deviation `0.02`.
@@ -879,6 +879,24 @@ Conclusion: one learned query per four-frame chunk consistently improves over bo
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v24/20260905010958/hf-276`.
 
 Startup validation: all ranks report `lact_chunk_query_mode=spatial_quarter`, parallel Linear16+Delta, fast-Q/K 3D RoPE, zero linear gate, 4K sample/pack limits, and uniform FW/query/gate/projector LR. The 12,624 rows pack into 4,401 sequences / 276 steps without placeholder mismatch. Steps 1-3 complete at CE `0.75414/0.71291/0.75475`, finite pre-clip norms `5.8636/8.9761/10.6547`, and equal group LRs `0/2.5e-6/5e-6`; maximum observed allocation is `27.25 GB`. The larger direct visual-token budget raises the initial norm substantially above v23's `1.1265` while remaining finite under global clipping. Active run directory `20260905010958`; native log `torchrun_logs/training_20260905_010940_datava270000004.log`.
+
+Training completion: v24 finished in `10,964.18s` and saved `20260905010958/hf-276`. First/final CE is `0.7541/0.3569`; first/last-20 mean is `0.5650/0.3652`. Pre-clip grad norm mean/median/max is `3.750/2.758/46.042`, with the maximum at step 91; all 276 values are finite and global clipping remains active. Maximum allocated/reserved memory is `27.45/29.73 GB`.
+
+Checkpoint inspection `20260905010958/checkpoint_inspection.json` compares the export against the configured Linear16 attention-share/zero-gate/unit-memory-norm initialization. Gate RMS/mean-absolute/max-absolute reaches `2.92e-4/2.30e-4/1.43e-3`; FW private/value relative L2 deltas are `0.751%/0.865%`, projector delta is `1.351%`, trained query-bank RMS is `0.01991`, and beta RMS is `0.02001`. Original attention, original MLP, other original vision parameters, the FW memory norm, and the 4B LM remain bitwise unchanged.
+
+### TimeLens-Bench Native Evaluation
+
+**Status:** Completed on all 9,404 queries with no missing predictions. Fixed native generation/scoring protocol matches v23 and Base R4: 2 FPS, up to 448 frames, 224px/14,680,064-total-pixel budget.
+
+| Subset | Base R4 R1@0.3 | v24 R1@0.3 | Delta | Base R1@0.5 | v24 R1@0.5 | Delta | Base R1@0.7 | v24 R1@0.7 | Delta | Base mIoU | v24 mIoU | Delta |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Charades-TimeLens | `46.57%` | `22.81%` | `-23.76` | `31.46%` | `14.24%` | `-17.22` | `13.92%` | `5.41%` | `-8.51` | `31.48%` | `15.60%` | `-15.88` |
+| ActivityNet-TimeLens | `46.20%` | `14.22%` | `-31.98` | `34.42%` | `9.71%` | `-24.71` | `21.20%` | `6.02%` | `-15.18` | `33.59%` | `11.30%` | `-22.29` |
+| QVHighlights-TimeLens | `67.10%` | `8.89%` | `-58.21` | `54.57%` | `6.16%` | `-48.41` | `38.87%` | `3.37%` | `-35.50` | `50.42%` | `7.78%` | `-42.64` |
+
+Config: `vlmevalkit-videochat3/configs/videochat3_v24_timelens_bench.json`; launcher: `scripts/eval_videochat3_v24_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v24-timelens-bench/VideoChat3-4B-LACT-v24/T20260905_G06d01356`.
+
+Conclusion: increasing v23's one query per chunk to a Base-R4-sized token budget improves mIoU by `+3.09/+2.82/+1.18` points on Charades/ActivityNet/QVHighlights and improves every recall threshold, so within-chunk query capacity matters. It still trails Base R4 by `15.88/22.29/42.64` mIoU because equal token count does not make learned query summaries information-equivalent to retained spatial patch-merger tokens.
 
 ## v25 - Serial Linear16 + Delta 3D RoPE, Base-R4-Budget Per-Chunk Queries
 
