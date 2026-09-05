@@ -937,7 +937,7 @@ Conclusion: serial changes mIoU relative to matched parallel v24 by `+0.30/+0.91
 
 ## v26 - Parallel Base-R4-Budget Queries, Train ViT + FW + Projector
 
-**Status:** Active at step 4/276 on public W&B; startup validation is complete.
+**Status:** Training completed at step 276/276; checkpoint diagnostics are complete and native TimeLens-Bench evaluation is pending.
 
 - Objective: test whether v24's FW-only vision scope suppresses gate learning by repeating v24 while unfreezing the original ViT; train original ViT, all LACT-added parameters including gates/query bank, and projector together.
 - Initialization: identical to v24, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state/gates, and the same seed-42 16-slot truncated-normal query bank initialization.
@@ -952,3 +952,7 @@ Conclusion: serial changes mIoU relative to matched parallel v24 by `+0.30/+0.91
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v26/20260905152729/hf-276`.
 
 Startup validation: FSDP reports `416.9M` original ViT, `143.9M` LACT-added, and `33.0M` projector parameters trainable (`593.8M` total), with the LM frozen; all three optimizer groups use the same warmup/cosine LR. Step 1 exactly matches v24 CE `0.754141` because both gates are initially zero, while opening ViT raises the pre-clip global norm from v24's `5.8636` to `13.0132`. Steps 2-4 remain finite at CE `0.71291/0.75520/0.78926` and norms `17.6052/53.6162/11.0733`; maximum observed allocation/reservation is `29.04/31.00 GB`. There is no OOM, invalid norm, skipped update, or placeholder mismatch. Active run directory `20260905152729`; native log `torchrun_logs/training_20260905_152711_datava270000004.log`.
+
+Training completion: v26 finished in `10,998.37s` and saved `20260905152729/hf-276`. First/final CE is `0.7541/0.2366`; first/last-20 mean is `0.5346/0.2606`, substantially below v24's `0.5650/0.3652`. Pre-clip grad norm mean/median/max is `7.110/4.380/164.890`, with the maximum at step 13; all 276 steps exceed the global clip threshold but remain finite. Maximum allocated/reserved memory is `29.34/31.48 GB`.
+
+Checkpoint inspection `20260905152729/checkpoint_inspection.json` shows gate RMS/mean-absolute/max-absolute `2.03e-4/1.61e-4/9.92e-4`, lower than v24's `2.92e-4/2.30e-4/1.43e-3`. FW private/value relative L2 deltas also fall from v24's `0.751%/0.865%` to `0.481%/0.576%`, while projector delta falls from `1.351%` to `1.218%`. The newly trainable original attention/MLP/other-ViT relative deltas are `0.689%/0.325%/0.0267%`; the 4B LM remains bitwise unchanged. Joint global clipping therefore lets the original ViT absorb most adaptation and reduces, rather than improves, gate/FW movement.
