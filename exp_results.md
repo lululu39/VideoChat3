@@ -973,7 +973,7 @@ Conclusion: unfreezing the original ViT is decisive for learned-query compressio
 
 ## v27 - Base Vision + Base-R4-Budget Per-Chunk Queries, Train ViT + Projector
 
-**Status:** Launcher prepared; training is pending.
+**Status:** Active at step 2/276 on public W&B; startup validation is complete.
 
 - Objective: isolate whether v26 benefits from FW memory at all by removing the entire LACT/FW branch and training a true Base vision encoder with the identical learned-query interface; compare Base+query ViT/projector adaptation against v26's ViT/FW/projector adaptation.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B`; all 734 original tensors load unchanged, and a seed-42 16-slot query bank is initialized with truncated normal standard deviation `0.02`.
@@ -985,4 +985,6 @@ Conclusion: unfreezing the original ViT is decisive for learned-query compressio
 - Hardware/batch/sequence: identical to v26, 8xH100 ordinary FSDP, global batch 16, 4K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, 4,401 packs, and 276 optimizer steps.
 - Training W&B: [`v27`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-base-r4query-vitproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v27).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_BASE_R4QUERY_VITPROJ_train_timelens_v27.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-base-r4query-vitproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v27/<timestamp>/hf-276`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-base-r4query-vitproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v27/20260905200730/hf-276`.
+
+Startup validation: all ranks load the exact v24-v26 4,401-pack cache and report `416.9M` Base ViT/query plus `33.0M` projector parameters trainable, `0M` LACT/FW parameters, and a frozen LM. Steps 1-2 complete at CE `0.74868/0.70748`, finite pre-clip norms `25.6957/80.8657`, and equal ViT/projector LRs `0/2.5e-6`; maximum observed allocation/reservation is `19.74/22.07 GB`. A stable step takes about 11 seconds, with no OOM, invalid norm, skipped update, or placeholder mismatch. Active run directory `20260905200730`; native log `torchrun_logs/training_20260905_200712_datava270000004.log`.
