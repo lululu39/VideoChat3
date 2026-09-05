@@ -863,7 +863,7 @@ Conclusion: one learned query per four-frame chunk consistently improves over bo
 
 ## v24 - Parallel Linear16 + Delta 3D RoPE, Base-R4-Budget Per-Chunk Queries
 
-**Status:** Launcher prepared; cache construction and training are pending.
+**Status:** Active at step 3/276 on public W&B; startup validation is complete.
 
 - Objective: repeat v23 while increasing each chunk from one learned query to one quarter of its post-merger spatial-token count, so every complete four-chunk group presents approximately the same number of LM visual tokens as Base R4 while retaining one independently supervised summary path per original four-frame chunk.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; Linear16 private Q/K/V/O uses deterministic attention share-init, recurrent state and linear gates start at zero, and a 16-slot shared query bank is initialized with truncated normal standard deviation `0.02`.
@@ -873,7 +873,9 @@ Conclusion: one learned query per four-frame chunk consistently improves over bo
 - Query budget: for post-merger spatial size `S=(H/2)*(W/2)`, retain `max(1,floor(S/4))` queries from every chunk. At the standard 224 resolution, `S=64`, so each chunk contributes 16 queries and four chunks contribute the same 64 tokens as Base R4. For non-divisible `S`, the complete four-chunk group is conservatively at most three tokens below Base R4 and never above it.
 - Optimizer/LR schedule: identical to v23, one uniform AdamW LR for FW/query/gate/projector, 3% warmup and cosine `2e-5 -> 1e-6`, weight decay 0, one epoch, initial inner Delta write strength `0.01`, and learned token/head beta; there is no gate-specific LR group.
 - Stabilization: identical to v23, no FW ratio clip or NS5; XTuner global gradient clip remains 1.0.
-- Hardware/batch/sequence: 8xH100 ordinary FSDP, global batch 16, TimeLens 2 FPS, 64-448 frames, and total-pixel budget 14,680,064. Query-aware estimated lengths are mean/median/p90/p99/max `1105/987/1867/1984/2091`; sample and pack limits therefore increase from v23's 1K to 4K to preserve every query, while all other training settings remain unchanged.
+- Hardware/batch/sequence: 8xH100 ordinary FSDP, global batch 16, TimeLens 2 FPS, 64-448 frames, and total-pixel budget 14,680,064. Query-aware estimated lengths are mean/median/p90/p99/max `1105/987/1867/1984/2091`; sample and pack limits therefore increase from v23's 1K to 4K to preserve every query, while all other training settings remain unchanged. The resulting cache has 4,401 packs and 276 optimizer steps.
 - Training W&B: [`v24`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v24).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_R4QUERY_train_timelens_v24.sh`.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v24/<timestamp>/hf-<final-step>`.
+
+Startup validation: all ranks report `lact_chunk_query_mode=spatial_quarter`, parallel Linear16+Delta, fast-Q/K 3D RoPE, zero linear gate, 4K sample/pack limits, and uniform FW/query/gate/projector LR. The 12,624 rows pack into 4,401 sequences / 276 steps without placeholder mismatch. Steps 1-3 complete at CE `0.75414/0.71291/0.75475`, finite pre-clip norms `5.8636/8.9761/10.6547`, and equal group LRs `0/2.5e-6/5e-6`; maximum observed allocation is `27.25 GB`. The larger direct visual-token budget raises the initial norm substantially above v23's `1.1265` while remaining finite under global clipping. Active run directory `20260905010958`; native log `torchrun_logs/training_20260905_010940_datava270000004.log`.
