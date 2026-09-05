@@ -900,7 +900,7 @@ Conclusion: increasing v23's one query per chunk to a Base-R4-sized token budget
 
 ## v25 - Serial Linear16 + Delta 3D RoPE, Base-R4-Budget Per-Chunk Queries
 
-**Status:** Active at step 3/276 on public W&B; startup validation is complete.
+**Status:** Training completed at step 276/276; checkpoint diagnostics are complete and native TimeLens-Bench evaluation is pending.
 
 - Objective: isolate FW block topology by repeating v24 with `fw_order="serial"` as the only model/training change; attention consumes the layer input first and the private FW branch consumes the post-attention hidden state.
 - Initialization: identical to v24, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private projections, zero recurrent state/gates, and the same 16-slot truncated-normal query bank initialization.
@@ -916,3 +916,7 @@ Conclusion: increasing v23's one query per chunk to a Base-R4-sized token budget
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-serial-gate0-r4query-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v25/20260905055511/hf-276`.
 
 Startup validation: all ranks report the intended serial Linear16+Delta topology, `lact_chunk_query_mode=spatial_quarter`, fast-Q/K 3D RoPE, zero linear gate, 4K limits, and uniform FW/query/gate/projector LR. It reuses v24's 4,401 packs / 276 steps. Because the gate is still exactly zero, step-1 CE exactly matches v24 at `0.754141`; the serial/parallel pre-clip norms are `5.8482/5.8636`. Steps 2-3 remain finite at CE `0.71291/0.75670` and norms `8.9625/5.0397`, with equal group LRs `2.5e-6/5e-6`. Maximum observed allocation is `27.25 GB`; no OOM, invalid norm, skipped update, or placeholder mismatch occurs. Active run directory `20260905055511`; native log `torchrun_logs/training_20260905_055453_datava270000004.log`.
+
+Training completion: v25 finished in `11,003.63s` and saved `20260905055511/hf-276`. First/final CE is `0.7541/0.3609`; first/last-20 mean is `0.5651/0.3653`, effectively identical to v24's `0.5650/0.3652`. Pre-clip grad norm mean/median/max is `4.910/4.069/32.316`, versus v24's `3.750/2.758/46.042`; all 276 values are finite. Maximum allocated/reserved memory is `27.45/29.88 GB`.
+
+Checkpoint inspection `20260905055511/checkpoint_inspection.json` compares against the same configured initialization as v24. Gate RMS/mean-absolute/max-absolute is `2.90e-4/2.27e-4/1.39e-3`; FW private/value relative L2 deltas are `0.677%/0.812%`, projector delta is `1.320%`, trained query-bank RMS is `0.01995`, and beta RMS is `0.02001`. Original attention, original MLP, other original vision parameters, the FW memory norm, and 4B LM remain bitwise unchanged.
