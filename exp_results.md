@@ -1006,3 +1006,19 @@ Checkpoint inspection `20260905200730/checkpoint_inspection.json` shows original
 Config: `vlmevalkit-videochat3/configs/videochat3_v27_timelens_bench.json`; launcher: `scripts/eval_videochat3_v27_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v27-timelens-bench/VideoChat3-4B-Base-Query-v27/T20260905_G07b6933a`.
 
 Conclusion: Base+query without FW fails despite jointly training ViT/query/projector. Relative to v26 it loses `22.91/30.42/43.93` mIoU on Charades/ActivityNet/QVHighlights, and it is also `1.53/4.17/2.96` below FW/projector-only v24. Together with v26's much lower training CE, this is strong evidence that ViT adaptation and cross-chunk FW reads are complementary: local per-chunk queries alone cannot recover grounding. The query bank uses the same seed-42 truncated-normal rule but is not bitwise matched across the structurally different Base and LACT constructors, so a common-query initialization replay would be required for a strictly single-variable parameter-initialization ablation; the observed `23-44` point gap is nevertheless far larger than the initialization-scale difference.
+
+## v28 - Serial Base-R4-Budget Queries, Train ViT + FW + Projector
+
+**Status:** Launcher prepared; training is pending.
+
+- Objective: isolate FW block topology under successful joint adaptation by repeating v26 with `fw_order="serial"` as the only model/training change; compare against v26 parallel and the FW-only v24/v25 topology pair.
+- Initialization: identical to v26, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state/gates, and the same seed-42 16-slot truncated-normal query bank initialization.
+- Data: identical seed-42 12,624-row TimeLens random-half manifest and exact v24-v26 4,401-pack query-aware cache, preserving samples and order.
+- Trainable scope: identical to v26, all `416,870,640` original ViT parameters, all `143,905,536` LACT-added parameters including query/gates, and all `33,039,616` projector parameters (`593,815,792` total); only the 4B LM is frozen.
+- Memory/update: identical Linear16+Delta group-1 continuous state, fast-Q/K 3D RoPE, Base-R4-budget per-chunk queries with identity query RoPE and no query writes, apply-then-update, final update skip, and zero-initialized linear gates. Only `fw_order="parallel" -> "serial"` changes, so the FW branch consumes the post-attention hidden state.
+- Optimizer/LR schedule: identical to v26, uniform ViT/FW/query/gate/projector AdamW with 3% warmup and cosine `2e-5 -> 1e-6`, weight decay 0, one epoch, inner Delta write strength `0.01`, and no gate-specific LR.
+- Stabilization: identical to v26, no FW ratio clip or NS5; XTuner global gradient clip 1.0 covers ViT, FW, and projector jointly.
+- Hardware/batch/sequence: identical to v26, 8xH100 ordinary FSDP, global batch 16, 4K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, 4,401 packs, and 276 optimizer steps.
+- Training W&B: [`v28`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-serial-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v28).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_SERIAL_GATE0_R4QUERY_VITFWPROJ_train_timelens_v28.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-serial-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v28/<timestamp>/hf-276`.
