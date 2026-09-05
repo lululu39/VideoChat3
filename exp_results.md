@@ -973,7 +973,7 @@ Conclusion: unfreezing the original ViT is decisive for learned-query compressio
 
 ## v27 - Base Vision + Base-R4-Budget Per-Chunk Queries, Train ViT + Projector
 
-**Status:** Training completed at step 276/276; checkpoint diagnostics are complete and native TimeLens-Bench evaluation is pending.
+**Status:** Training completed at step 276/276; checkpoint diagnostics and native TimeLens-Bench evaluation are complete.
 
 - Objective: isolate whether v26 benefits from FW memory at all by removing the entire LACT/FW branch and training a true Base vision encoder with the identical learned-query interface; compare Base+query ViT/projector adaptation against v26's ViT/FW/projector adaptation.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B`; all 734 original tensors load unchanged, and a seed-42 16-slot query bank is initialized with truncated normal standard deviation `0.02`.
@@ -992,3 +992,17 @@ Startup validation: all ranks load the exact v24-v26 4,401-pack cache and report
 Training completion: v27 finished in `3,444.67s` and saved `20260905200730/hf-276`. First/final CE is `0.7487/0.3722`; first/last-20 mean is `0.5491/0.3886`, substantially above v26's `0.5346/0.2606`. Pre-clip grad norm mean/median/max is `3.154/0.164/80.866`, with the maximum at step 2; 74/276 steps exceed 1 and all values are finite. Maximum allocated/reserved memory is `20.32/22.78 GB`.
 
 Checkpoint inspection `20260905200730/checkpoint_inspection.json` shows original attention/MLP/other-ViT relative L2 deltas `0.604%/0.279%/0.0215%`, projector delta `1.452%`, and trained query-bank RMS `0.01999`; the 4B LM remains bitwise unchanged. The exported `VideoChat3MacroConfig`, `VideoChat3MacroProcessor`, and model load with no missing, unexpected, or mismatched keys and contain no FW/memory parameters.
+
+### TimeLens-Bench Native Evaluation
+
+**Status:** Completed on all 9,404 queries with no missing predictions. Fixed native generation/scoring protocol is identical to v24-v26 and Base R4: 2 FPS, up to 448 frames, 224px/14,680,064-total-pixel budget.
+
+| Subset | Base R4 R1@0.3 | v27 R1@0.3 | Delta | Base R1@0.5 | v27 R1@0.5 | Delta | Base R1@0.7 | v27 R1@0.7 | Delta | Base mIoU | v27 mIoU | Delta |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Charades-TimeLens | `46.57%` | `21.14%` | `-25.43` | `31.46%` | `12.25%` | `-19.21` | `13.92%` | `4.49%` | `-9.43` | `31.48%` | `14.07%` | `-17.41` |
+| ActivityNet-TimeLens | `46.20%` | `8.51%` | `-37.69` | `34.42%` | `5.07%` | `-29.35` | `21.20%` | `2.64%` | `-18.56` | `33.59%` | `7.13%` | `-26.46` |
+| QVHighlights-TimeLens | `67.10%` | `4.74%` | `-62.36` | `54.57%` | `2.40%` | `-52.17` | `38.87%` | `0.97%` | `-37.90` | `50.42%` | `4.82%` | `-45.60` |
+
+Config: `vlmevalkit-videochat3/configs/videochat3_v27_timelens_bench.json`; launcher: `scripts/eval_videochat3_v27_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v27-timelens-bench/VideoChat3-4B-Base-Query-v27/T20260905_G07b6933a`.
+
+Conclusion: Base+query without FW fails despite jointly training ViT/query/projector. Relative to v26 it loses `22.91/30.42/43.93` mIoU on Charades/ActivityNet/QVHighlights, and it is also `1.53/4.17/2.96` below FW/projector-only v24. Together with v26's much lower training CE, this is strong evidence that ViT adaptation and cross-chunk FW reads are complementary: local per-chunk queries alone cannot recover grounding. The query bank uses the same seed-42 truncated-normal rule but is not bitwise matched across the structurally different Base and LACT constructors, so a common-query initialization replay would be required for a strictly single-variable parameter-initialization ablation; the observed `23-44` point gap is nevertheless far larger than the initialization-scale difference.
