@@ -197,11 +197,13 @@ def test_hf_interval_save_loads_independent_lact_model(tmp_path):
     assert saved_config["vision_config"]["macro_temporal_compression_mode"] == "auto"
     assert saved_config["vision_config"]["lact_3d_rope"] is True
     assert saved_config["vision_config"]["lact_chunk_query"] is True
+    assert saved_config["vision_config"]["lact_chunk_query_mode"] == "single"
     assert saved_config["vision_config"]["fw_order"] == "parallel"
     assert saved_config["vision_config"]["lact_gate"] == "tanh"
     assert saved_config["vision_config"]["lact_gate_init"] == 0.5
     saved_processor = json.loads((save_path / "processor_config.json").read_text())
     assert saved_processor["lact_chunk_query"] is True
+    assert saved_processor["lact_chunk_query_mode"] == "single"
     assert saved_config["architectures"] == ["VideoChat3LACTForConditionalGeneration"]
     assert saved_config["auto_map"]["AutoModelForCausalLM"] == (
         "modeling_videochat3_lact.VideoChat3LACTForConditionalGeneration"
@@ -218,6 +220,7 @@ def test_hf_interval_save_loads_independent_lact_model(tmp_path):
     assert hf_config.vision_config.macro_temporal_compression_mode == "auto"
     assert hf_config.vision_config.lact_3d_rope is True
     assert hf_config.vision_config.lact_chunk_query is True
+    assert hf_config.vision_config.lact_chunk_query_mode == "single"
     assert hf_config.vision_config.fw_order == "parallel"
     assert hf_config.vision_config.lact_gate == "tanh"
     assert hf_config.vision_config.lact_gate_init == 0.5

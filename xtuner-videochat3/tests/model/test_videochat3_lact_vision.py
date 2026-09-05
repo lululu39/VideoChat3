@@ -11,6 +11,7 @@ from xtuner.v1.model.compose.videochat3.modeling_vision_lact import (
     _CaptureNextStateGradient,
     _StateGradRatioContext,
     build_lact_3d_rope_freqs,
+    chunk_query_counts,
     interleave_identity_rope_for_chunk_queries,
     zeropower_via_newtonschulz5,
 )
@@ -431,6 +432,37 @@ def test_chunk_query_returns_one_trainable_summary_per_chunk():
     assert torch.count_nonzero(model.chunk_query.grad).item() > 0
 
 
+def test_spatial_quarter_query_mode_returns_multiple_summaries_per_chunk():
+    torch.manual_seed(31)
+    model = VideoChat3LACTVisionConfig(
+        **_vision_kwargs(),
+        memory_type="linear",
+        inner_optim="delta",
+        fw_num_heads=4,
+        fw_muon_update_steps=0,
+        fw_order="parallel",
+        lact_3d_rope=True,
+        lact_chunk_query=True,
+        lact_chunk_query_mode="spatial_quarter",
+    ).build()
+    model.init_weights()
+    grid_thws = torch.tensor([[8, 4, 8]], dtype=torch.int32)
+    split_grid, _ = model.split_grid_thws_clip_by_clip_with_counts(grid_thws, 4)
+
+    assert chunk_query_counts(
+        split_grid,
+        model.config.merge_kernel_size,
+        "spatial_quarter",
+    ) == [2, 2]
+    outputs = model(torch.randn(256, 12), grid_thws)
+    assert len(outputs) == 4
+    assert all(output.shape == (1, 4, 16) for output in outputs)
+    torch.cat(outputs).square().mean().backward()
+    assert model.chunk_query.shape == (16, 16)
+    assert model.chunk_query.grad is not None
+    assert torch.count_nonzero(model.chunk_query.grad[:2]).item() > 0
+
+
 def test_chunk_query_reads_memory_but_is_excluded_from_linear_state_writes():
     model = VideoChat3LACTVisionConfig(
         **_vision_kwargs(),
@@ -632,6 +664,7 @@ def test_lact_config_builds_separate_vision_model():
     assert config.clip_state_grad_ratio is True
     assert config.lact_3d_rope is False
     assert config.lact_chunk_query is False
+    assert config.lact_chunk_query_mode == "single"
     assert config.fw_order == "serial"
     assert config.lact_gate == "linear"
     assert config.lact_gate_init == 0.0

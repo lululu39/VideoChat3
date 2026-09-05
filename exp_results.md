@@ -860,3 +860,20 @@ Checkpoint inspection confirms that all 31,104 BF16-exported gates move from zer
 Config: `vlmevalkit-videochat3/configs/videochat3_v23_timelens_bench.json`; launcher: `scripts/eval_videochat3_v23_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v23-timelens-bench/VideoChat3-4B-LACT-v23/T20260904_G85606c61`.
 
 Conclusion: one learned query per four-frame chunk consistently improves over both matched Base video-last and v19 final-chunk LACT. Relative to v19, mIoU changes by `+1.97/+1.23/+2.69` points on Charades/ActivityNet/QVHighlights; relative to Base video-last it changes by `+0.71/+0.74/+3.54`. The direct per-chunk summary path is materially better than retaining only the final chunk, especially on QVHighlights, but remains far below v12's spatial-grid R4 results (`26.63/27.98/39.53%`) and v15's full-token results (`41.39/43.57/55.00%`). One token per chunk preserves temporal coverage but still discards too much within-chunk spatial detail.
+
+## v24 - Parallel Linear16 + Delta 3D RoPE, Base-R4-Budget Per-Chunk Queries
+
+**Status:** Launcher prepared; cache construction and training are pending.
+
+- Objective: repeat v23 while increasing each chunk from one learned query to one quarter of its post-merger spatial-token count, so every complete four-chunk group presents approximately the same number of LM visual tokens as Base R4 while retaining one independently supervised summary path per original four-frame chunk.
+- Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`; Linear16 private Q/K/V/O uses deterministic attention share-init, recurrent state and linear gates start at zero, and a 16-slot shared query bank is initialized with truncated normal standard deviation `0.02`.
+- Data: same seed-42 12,624-row TimeLens random-half manifest over 8,985 videos as v23; a new query-count-aware cache is required.
+- Trainable scope: all `143,905,536` LACT-added parameters, including the 18,432-element query bank and gates, plus all `33,039,616` projector parameters (`176,945,152` total); original ViT and 4B LM frozen.
+- Memory/update: identical to v23: parallel private-projection Linear16+Delta group-1 continuous state with fast-Q/K 3D RoPE. All queries participate in window attention and FW reads but are excluded from FW writes; they use identity vision-side RoPE, distinct learned slot embeddings, explicit chunk timestamps, and ordinary LLM sequence positions.
+- Query budget: for post-merger spatial size `S=(H/2)*(W/2)`, retain `max(1,floor(S/4))` queries from every chunk. At the standard 224 resolution, `S=64`, so each chunk contributes 16 queries and four chunks contribute the same 64 tokens as Base R4. For non-divisible `S`, the complete four-chunk group is conservatively at most three tokens below Base R4 and never above it.
+- Optimizer/LR schedule: identical to v23, one uniform AdamW LR for FW/query/gate/projector, 3% warmup and cosine `2e-5 -> 1e-6`, weight decay 0, one epoch, initial inner Delta write strength `0.01`, and learned token/head beta; there is no gate-specific LR group.
+- Stabilization: identical to v23, no FW ratio clip or NS5; XTuner global gradient clip remains 1.0.
+- Hardware/batch/sequence: 8xH100 ordinary FSDP, global batch 16, TimeLens 2 FPS, 64-448 frames, and total-pixel budget 14,680,064. Query-aware estimated lengths are mean/median/p90/p99/max `1105/987/1867/1984/2091`; sample and pack limits therefore increase from v23's 1K to 4K to preserve every query, while all other training settings remain unchanged.
+- Training W&B: [`v24`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v24).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_R4QUERY_train_timelens_v24.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v24/<timestamp>/hf-<final-step>`.

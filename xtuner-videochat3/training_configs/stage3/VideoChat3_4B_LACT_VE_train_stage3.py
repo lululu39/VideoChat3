@@ -70,6 +70,10 @@ if model_variant == "lact":
             fw_order=os.getenv("VIDEOCHAT3_FW_ORDER", "serial"),
             lact_3d_rope=env_bool("VIDEOCHAT3_LACT_3D_ROPE"),
             lact_chunk_query=lact_chunk_query,
+            lact_chunk_query_mode=os.getenv(
+                "VIDEOCHAT3_LACT_CHUNK_QUERY_MODE",
+                "single",
+            ),
             lact_gate=os.getenv("VIDEOCHAT3_LACT_GATE", "linear"),
             lact_gate_init=float(os.getenv("VIDEOCHAT3_LACT_GATE_INIT", "0")),
             clip_ns_grad_ratio=False,
@@ -181,6 +185,10 @@ for name, data in dataset_collections.items():
                 macro_temporal_compression_factor=macro_temporal_compression_factor,
                 macro_temporal_compression_mode=macro_temporal_compression_mode,
                 lact_chunk_query=lact_chunk_query,
+                lact_chunk_query_mode=os.getenv(
+                    "VIDEOCHAT3_LACT_CHUNK_QUERY_MODE",
+                    "single",
+                ),
                 processor_path=str(model_path),
                 data_augment=data.get("data_augment", False),
                 system_message=data.get("system_message"),

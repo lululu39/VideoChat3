@@ -233,6 +233,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
         macro_temporal_compression_factor: int = 1,
         macro_temporal_compression_mode: str = "auto",
         lact_chunk_query: bool = False,
+        lact_chunk_query_mode: str = "single",
         system_message: str | None = None,
         add_vision_id: bool = False,
         max_length: int | None = None,
@@ -275,6 +276,12 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             default="mean",
         )
         self.lact_chunk_query = bool(lact_chunk_query)
+        if lact_chunk_query_mode not in ("single", "spatial_quarter"):
+            raise ValueError(
+                "lact_chunk_query_mode must be 'single' or 'spatial_quarter', "
+                f"got {lact_chunk_query_mode!r}"
+            )
+        self.lact_chunk_query_mode = lact_chunk_query_mode
         if self.lact_chunk_query and (
             self.macro_temporal_compression_factor != 1
             or macro_temporal_compression_mode != "auto"
@@ -282,6 +289,10 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             raise ValueError(
                 "lact_chunk_query requires macro temporal compression factor 1 "
                 "and mode 'auto'"
+            )
+        if not self.lact_chunk_query and self.lact_chunk_query_mode != "single":
+            raise ValueError(
+                "lact_chunk_query_mode requires lact_chunk_query=True"
             )
 
         self.add_vision_id = add_vision_id
@@ -298,6 +309,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             f"macro_temporal_compression_factor: {self.macro_temporal_compression_factor}, "
             f"macro_temporal_compression_mode: {self.macro_temporal_compression_mode}, "
             f"lact_chunk_query: {self.lact_chunk_query}, "
+            f"lact_chunk_query_mode: {self.lact_chunk_query_mode}, "
             f"add_vision_id: {self.add_vision_id}, "
             f"spatial_merge_length: {self.spatial_merge_length}, temporal_merge_length: {self.temporal_merge_length}"
         )
@@ -325,6 +337,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             f"{self.macro_temporal_compression_factor}_"
             f"{self.macro_temporal_compression_mode}_"
             f"{self.lact_chunk_query}_"
+            f"{self.lact_chunk_query_mode}_"
             f"{self.add_vision_id}_"
             f"{self.spatial_merge_length}_"
             f"{self.temporal_merge_length}_"
@@ -534,14 +547,22 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
                                         self.macro_temporal_compression_factor,
                                         mode=self.macro_temporal_compression_mode,
                                     )
-                                video_tokens = ""
-                                frame_seqlen = (
-                                    1
-                                    if self.lact_chunk_query
-                                    else video_grid_thw[current_video_idx][1:].prod()
-                                    // merge_length
+                                query_counts = self._chunk_query_counts(
+                                    video_grid_thw[current_video_idx]
                                 )
-                                for curr_time in curr_timestamp:
+                                if self.lact_chunk_query and len(query_counts) != len(curr_timestamp):
+                                    raise ValueError(
+                                        f"Query counts {query_counts} do not match "
+                                        f"{len(curr_timestamp)} chunk timestamps"
+                                    )
+                                video_tokens = ""
+                                for chunk_index, curr_time in enumerate(curr_timestamp):
+                                    frame_seqlen = (
+                                        query_counts[chunk_index]
+                                        if self.lact_chunk_query
+                                        else video_grid_thw[current_video_idx][1:].prod()
+                                        // merge_length
+                                    )
                                     video_tokens += f"<{curr_time:.1f} seconds>"
                                     video_tokens += (
                                         chat_template.image_start_token + chat_template.video_context_token * frame_seqlen + chat_template.image_end_token
@@ -558,12 +579,25 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             f"ERROR: current_video_idx: {current_video_idx} != num_video: {len(self._video_meta_list)}"
         )
 
+    def _chunk_query_counts(self, grid_thw) -> list[int]:
+        grid_t, grid_h, grid_w = (int(value) for value in grid_thw)
+        chunk_count = (
+            grid_t + self.video_processor.temporal_merge_size - 1
+        ) // self.video_processor.temporal_merge_size
+        if not self.lact_chunk_query:
+            return []
+        if self.lact_chunk_query_mode == "single":
+            return [1] * chunk_count
+        spatial_tokens = (
+            (grid_h // self.video_processor.merge_size)
+            * (grid_w // self.video_processor.merge_size)
+        )
+        return [max(1, spatial_tokens // 4)] * chunk_count
+
     def _get_number_of_video_tokens(self, grid_thw) -> int:
         grid_t, grid_h, grid_w = (int(value) for value in grid_thw)
         if self.lact_chunk_query:
-            return (
-                grid_t + self.video_processor.temporal_merge_size - 1
-            ) // self.video_processor.temporal_merge_size
+            return sum(self._chunk_query_counts((grid_t, grid_h, grid_w)))
         if self.macro_temporal_compression_factor == 1:
             return int(
                 self.video_processor.get_number_of_video_tokens(
@@ -819,6 +853,7 @@ class VideoChat3TokenizeFnConfig(BaseMLLMTokenizeFnConfig):
         "video_last",
     ] = "auto"
     lact_chunk_query: bool = False
+    lact_chunk_query_mode: Literal["single", "spatial_quarter"] = "single"
     # When handling multiple images, it's helpful to add labels to the images and videos for better reference.
     add_vision_id: bool = False
 
@@ -842,6 +877,7 @@ class VideoChat3TokenizeFnConfig(BaseMLLMTokenizeFnConfig):
             macro_temporal_compression_factor=self.macro_temporal_compression_factor,
             macro_temporal_compression_mode=self.macro_temporal_compression_mode,
             lact_chunk_query=self.lact_chunk_query,
+            lact_chunk_query_mode=self.lact_chunk_query_mode,
             video_max_total_pixels=self.video_max_total_pixels,
             add_vision_id=self.add_vision_id,
             max_length=self.max_length,

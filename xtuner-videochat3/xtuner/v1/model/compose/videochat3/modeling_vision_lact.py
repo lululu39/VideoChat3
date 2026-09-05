@@ -104,36 +104,53 @@ def interleave_chunk_query_tokens(
     hidden_states: torch.Tensor,
     patch_lengths: list[int],
     chunk_query: torch.Tensor,
+    query_counts: list[int] | None = None,
 ) -> tuple[torch.Tensor, list[int]]:
     """Append one shared learned query after every packed chunk."""
     if sum(patch_lengths) != hidden_states.shape[0]:
         raise ValueError(
             f"patch_lengths={patch_lengths} do not cover {hidden_states.shape[0]} tokens"
         )
+    if query_counts is None:
+        query_counts = [1] * len(patch_lengths)
+    if len(query_counts) != len(patch_lengths):
+        raise ValueError("query_counts and patch_lengths must have equal length")
+    query_bank = chunk_query.reshape(-1, chunk_query.shape[-1])
     outputs = []
     query_indices = []
     patch_offset = 0
     packed_offset = 0
-    for length in patch_lengths:
+    for length, query_count in zip(patch_lengths, query_counts, strict=True):
         if length <= 0:
             raise ValueError(f"patch length must be positive, got {length}")
         outputs.append(hidden_states[patch_offset : patch_offset + length])
-        outputs.append(chunk_query.reshape(1, -1))
-        query_indices.append(packed_offset + length)
+        if not 1 <= query_count <= query_bank.shape[0]:
+            raise ValueError(
+                f"query_count={query_count} exceeds query bank size {query_bank.shape[0]}"
+            )
+        outputs.append(query_bank[:query_count])
+        query_indices.extend(
+            range(packed_offset + length, packed_offset + length + query_count)
+        )
         patch_offset += length
-        packed_offset += length + 1
+        packed_offset += length + query_count
     return torch.cat(outputs, dim=0), query_indices
 
 
 def interleave_identity_rope_for_chunk_queries(
     rope_freqs_cis: torch.Tensor,
     patch_lengths: list[int],
+    query_counts: list[int] | None = None,
 ) -> torch.Tensor:
     """Give non-spatial chunk queries identity RoPE while preserving patch RoPE."""
     if sum(patch_lengths) != rope_freqs_cis.shape[0]:
         raise ValueError(
             f"patch_lengths={patch_lengths} do not cover {rope_freqs_cis.shape[0]} RoPE rows"
         )
+    if query_counts is None:
+        query_counts = [1] * len(patch_lengths)
+    if len(query_counts) != len(patch_lengths):
+        raise ValueError("query_counts and patch_lengths must have equal length")
     outputs = []
     offset = 0
     identity = torch.ones(
@@ -142,11 +159,31 @@ def interleave_identity_rope_for_chunk_queries(
         device=rope_freqs_cis.device,
         dtype=rope_freqs_cis.dtype,
     )
-    for length in patch_lengths:
+    for length, query_count in zip(patch_lengths, query_counts, strict=True):
         outputs.append(rope_freqs_cis[offset : offset + length])
-        outputs.append(identity)
+        outputs.append(identity.expand(query_count, -1))
         offset += length
     return torch.cat(outputs, dim=0)
+
+
+def chunk_query_counts(
+    grid_thws: torch.Tensor,
+    merge_kernel_size: list[int],
+    mode: str,
+) -> list[int]:
+    if mode not in ("single", "spatial_quarter"):
+        raise ValueError(f"Unsupported chunk query mode: {mode!r}")
+    merge_height, merge_width = merge_kernel_size
+    counts = []
+    for _, height, width in grid_thws.tolist():
+        if mode == "single":
+            counts.append(1)
+            continue
+        spatial_tokens = (int(height) // merge_height) * (
+            int(width) // merge_width
+        )
+        counts.append(max(1, spatial_tokens // 4))
+    return counts
 
 
 def inverse_softplus(value: float) -> float:
@@ -953,12 +990,22 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             return torch.tanh(self.memory_gate)
         return self.memory_gate
 
-    def _exclude_chunk_query_from_update(self, memory_input, key, target):
+    def _exclude_chunk_query_from_update(
+        self,
+        memory_input,
+        key,
+        target,
+        query_count: int = 1,
+    ):
         if not self.lact_chunk_query:
             return memory_input, key, target
-        if memory_input.shape[1] <= 1:
+        if not 1 <= query_count < memory_input.shape[1]:
             raise ValueError("A chunk query must follow at least one patch token")
-        return memory_input[:, :-1], key[:, :-1], target[:, :-1]
+        return (
+            memory_input[:, :-query_count],
+            key[:, :-query_count],
+            target[:, :-query_count],
+        )
 
     def _apply_lact_3d_rope(
         self,
@@ -1160,6 +1207,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         clip_slices: list[tuple[int, int]],
         video_clip_counts: list[int],
         lact_rope_freqs_cis: torch.Tensor | None = None,
+        clip_query_counts: list[int] | None = None,
         *,
         add_residual: bool = True,
     ) -> torch.Tensor:
@@ -1169,6 +1217,8 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                 f"{len(clip_slices)} clips"
             )
         clip_index = 0
+        if clip_query_counts is None:
+            clip_query_counts = [int(self.lact_chunk_query)] * len(clip_slices)
         reset_state = self.lact_inference_state_mode == "reset_state"
         if reset_state and self.training:
             raise RuntimeError("reset_state is an inference-only LACT state mode")
@@ -1242,7 +1292,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                     group_state,
                 )
                 if will_update:
-                    update_end = end - int(self.lact_chunk_query)
+                    update_end = end - clip_query_counts[clip_index]
                     state = self.memory.update_projected(
                         packed_key[:, start:update_end].to(group_state.dtype),
                         packed_target[:, start:update_end],
@@ -1273,6 +1323,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         clip_slices: list[tuple[int, int]],
         video_clip_counts: list[int],
         lact_rope_freqs_cis: torch.Tensor | None = None,
+        clip_query_counts: list[int] | None = None,
         *,
         add_residual: bool = True,
     ) -> torch.Tensor:
@@ -1282,8 +1333,11 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                 clip_slices,
                 video_clip_counts,
                 lact_rope_freqs_cis,
+                clip_query_counts,
                 add_residual=add_residual,
             )
+        if clip_query_counts is None:
+            clip_query_counts = [int(self.lact_chunk_query)] * len(clip_slices)
         if self.lact_inference_state_mode == "reset_state":
             if self.training:
                 raise RuntimeError("reset_state is an inference-only LACT state mode")
@@ -1348,6 +1402,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                         memory_input,
                         key,
                         target,
+                        clip_query_counts[clip_index],
                     )
                     fast_weights, master_weights = self.update_fast_weights_chunk(
                         memory_input,
@@ -1379,6 +1434,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         fast_w0: torch.Tensor,
         fast_w1: torch.Tensor,
         fast_w2: torch.Tensor,
+        chunk_query_count: int = 1,
     ):
         """Apply one layer to one temporal chunk without updating FW state."""
         memory_hidden_states = hidden_states
@@ -1400,6 +1456,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             memory_input,
             key,
             target,
+            chunk_query_count,
         )
         if self.fw_order == "parallel":
             hidden_states = hidden_states + memory_result.squeeze(0)
@@ -1417,6 +1474,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
         rope_freqs_cis: torch.Tensor,
         lact_rope_freqs_cis: torch.Tensor | None,
         fast_weights,
+        chunk_query_count: int = 1,
     ):
         args = (
             hidden_states,
@@ -1424,6 +1482,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             rope_freqs_cis,
             lact_rope_freqs_cis,
             *fast_weights,
+            chunk_query_count,
         )
         # Compiling FlashAttention together with the large slow MLP regresses
         # the real 1152-wide model.
@@ -1443,6 +1502,8 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             torch.Tensor,
         ]
         | None = None,
+        clip_query_counts: list[int] | None = None,
+        chunk_query_count: int = 1,
     ) -> torch.Tensor | tuple[torch.Tensor, ...]:
         if chunk_fast_weights is not None:
             return self.forward_chunk(
@@ -1451,6 +1512,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
                 rope_freqs_cis,
                 lact_rope_freqs_cis,
                 chunk_fast_weights,
+                chunk_query_count,
             )
         if clip_slices is None or video_clip_counts is None:
             raise ValueError("Full LACT layer forward requires clip layout")
@@ -1464,6 +1526,7 @@ class VideoChat3LACTVisionLayer(VideoChat3VisionLayer):
             clip_slices,
             video_clip_counts,
             lact_rope_freqs_cis,
+            clip_query_counts,
             add_residual=self.fw_order == "serial",
         )
         hidden_states = (
@@ -1666,6 +1729,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         lact_rope_freqs_cis: torch.Tensor | None,
         clip_slices: list[tuple[int, int]],
         video_clip_counts: list[int],
+        clip_query_counts: list[int],
     ) -> torch.Tensor:
         # FSDP parameters must be materialized before FW bases and private
         # projection weights are stacked across layers. The matching FSDP
@@ -1757,6 +1821,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
                             chunk_rope,
                             chunk_lact_rope,
                             chunk_fast_weights=fast_weights,
+                            chunk_query_count=clip_query_counts[clip_index],
                         )
                         update_records.append((memory_input, key, target))
 
@@ -1813,6 +1878,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
         hidden_states: torch.Tensor,
         grid_thws: torch.Tensor,
         video_clip_counts: list[int],
+        clip_query_counts: list[int] | None = None,
     ) -> torch.Tensor:
         rope_freqs_cis = self.rope_2d.get_freqs_cis(grid_thws=grid_thws)
         lact_rope_freqs_cis = None
@@ -1824,16 +1890,29 @@ class VideoChat3LACTVisionEncoder(nn.Module):
             )
         lengths = (grid_thws[:, 0] * grid_thws[:, 1] * grid_thws[:, 2]).tolist()
         if self.lact_chunk_query:
+            if clip_query_counts is None or len(clip_query_counts) != len(lengths):
+                raise ValueError("Chunk-query encoder requires one query count per chunk")
             rope_freqs_cis = interleave_identity_rope_for_chunk_queries(
                 rope_freqs_cis,
                 lengths,
+                clip_query_counts,
             )
             if lact_rope_freqs_cis is not None:
                 lact_rope_freqs_cis = interleave_identity_rope_for_chunk_queries(
                     lact_rope_freqs_cis,
                     lengths,
+                    clip_query_counts,
                 )
-            lengths = [int(length) + 1 for length in lengths]
+            lengths = [
+                int(length) + query_count
+                for length, query_count in zip(
+                    lengths,
+                    clip_query_counts,
+                    strict=True,
+                )
+            ]
+        elif clip_query_counts is None:
+            clip_query_counts = [0] * len(lengths)
         offsets = [0]
         for length in lengths:
             offsets.append(offsets[-1] + int(length))
@@ -1851,6 +1930,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
                     lact_rope_freqs_cis,
                     clip_slices,
                     video_clip_counts,
+                    clip_query_counts=clip_query_counts,
                 )
         else:
             hidden_states = self._forward_cross_layer_groups(
@@ -1859,6 +1939,7 @@ class VideoChat3LACTVisionEncoder(nn.Module):
                 lact_rope_freqs_cis,
                 clip_slices,
                 video_clip_counts,
+                clip_query_counts,
             )
         return self.final_layernorm(hidden_states)
 
@@ -1910,10 +1991,18 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
             },
         )
         self.chunk_query = (
-            nn.Parameter(torch.empty(config.hidden_size))
+            nn.Parameter(
+                torch.empty(
+                    (16, config.hidden_size)
+                    if config.lact_chunk_query_mode == "spatial_quarter"
+                    else (config.hidden_size,)
+                )
+            )
             if config.lact_chunk_query
             else None
         )
+        if self.chunk_query is not None:
+            nn.init.trunc_normal_(self.chunk_query, std=0.02)
         self._hf_prefix = "model.vision_tower."
         self._init_load_spec()
 
@@ -2027,18 +2116,30 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
             raise ValueError(f"Split grid changed token count: {expected_tokens} != {actual_tokens}")
         hidden_states = self.patch_embed(pixel_values, split_grid_thws)
         query_indices = None
+        clip_query_counts = None
         if self.chunk_query is not None:
             patch_lengths = (
                 split_grid_thws[:, 0]
                 * split_grid_thws[:, 1]
                 * split_grid_thws[:, 2]
             ).tolist()
+            clip_query_counts = chunk_query_counts(
+                split_grid_thws,
+                self.config.merge_kernel_size,
+                self.config.lact_chunk_query_mode,
+            )
             hidden_states, query_indices = interleave_chunk_query_tokens(
                 hidden_states,
                 patch_lengths,
                 self.chunk_query,
+                clip_query_counts,
             )
-        hidden_states = self.encoder(hidden_states, split_grid_thws, video_clip_counts)
+        hidden_states = self.encoder(
+            hidden_states,
+            split_grid_thws,
+            video_clip_counts,
+            clip_query_counts,
+        )
         if query_indices is not None:
             merge_area = math.prod(self.config.merge_kernel_size)
             return [

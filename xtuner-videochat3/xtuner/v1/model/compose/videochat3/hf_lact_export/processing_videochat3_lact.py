@@ -18,6 +18,7 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
         macro_temporal_compression_factor: int = 1,
         macro_temporal_compression_mode: str = "auto",
         lact_chunk_query: bool = False,
+        lact_chunk_query_mode: str = "single",
         **kwargs: Any,
     ):
         if macro_temporal_compression_factor not in (1, 2, 4, 8):
@@ -39,6 +40,12 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
         self.macro_temporal_compression_factor = macro_temporal_compression_factor
         self.macro_temporal_compression_mode = macro_temporal_compression_mode
         self.lact_chunk_query = bool(lact_chunk_query)
+        if lact_chunk_query_mode not in ("single", "spatial_quarter"):
+            raise ValueError(
+                "lact_chunk_query_mode must be 'single' or 'spatial_quarter', "
+                f"got {lact_chunk_query_mode!r}"
+            )
+        self.lact_chunk_query_mode = lact_chunk_query_mode
         if self.lact_chunk_query and (
             macro_temporal_compression_factor != 1
             or macro_temporal_compression_mode != "auto"
@@ -46,6 +53,10 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
             raise ValueError(
                 "lact_chunk_query requires macro temporal compression factor 1 "
                 "and mode 'auto'"
+            )
+        if not self.lact_chunk_query and self.lact_chunk_query_mode != "single":
+            raise ValueError(
+                "lact_chunk_query_mode requires lact_chunk_query=True"
             )
         super().__init__(
             image_processor=image_processor,
@@ -87,19 +98,7 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
         if isinstance(input_ids, torch.Tensor):
             squeeze = input_ids.ndim == 1
             rows = input_ids.unsqueeze(0) if squeeze else input_ids
-            keep_masks = [
-                torch.tensor(
-                    [
-                        index == 0
-                        or token.item() != self.video_token_id
-                        or row[index - 1].item() != self.video_token_id
-                        for index, token in enumerate(row)
-                    ],
-                    device=row.device,
-                    dtype=torch.bool,
-                )
-                for row in rows
-            ]
+            keep_masks = [self._video_token_keep_mask(row) for row in rows]
             aligned = {
                 key: value.unsqueeze(0) if squeeze and value.ndim == 1 else value
                 for key, value in outputs.items()
@@ -133,12 +132,7 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
 
         if isinstance(input_ids, list) and input_ids and isinstance(input_ids[0], list):
             keep_masks = [
-                [
-                    index == 0
-                    or token != self.video_token_id
-                    or row[index - 1] != self.video_token_id
-                    for index, token in enumerate(row)
-                ]
+                self._video_token_keep_mask(torch.tensor(row)).tolist()
                 for row in input_ids
             ]
             for key, value in list(outputs.items()):
@@ -153,6 +147,26 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
                         for row, mask in zip(value, keep_masks, strict=True)
                     ]
         return outputs
+
+    def _video_token_keep_mask(self, row: torch.Tensor) -> torch.Tensor:
+        keep = torch.ones(row.shape[0], device=row.device, dtype=torch.bool)
+        index = 0
+        while index < row.shape[0]:
+            if row[index].item() != self.video_token_id:
+                index += 1
+                continue
+            end = index + 1
+            while end < row.shape[0] and row[end].item() == self.video_token_id:
+                end += 1
+            run_length = end - index
+            keep_count = (
+                1
+                if self.lact_chunk_query_mode == "single"
+                else max(1, run_length // 4)
+            )
+            keep[index + keep_count : end] = False
+            index = end
+        return keep
 
 
 __all__ = ["VideoChat3LACTProcessor"]

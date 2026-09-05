@@ -83,6 +83,7 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
     lact_inference_state_mode: Literal["continuous", "reset_state"] = "continuous"
     lact_3d_rope: bool = False
     lact_chunk_query: bool = False
+    lact_chunk_query_mode: Literal["single", "spatial_quarter"] = "single"
     lact_gate: Literal["linear", "tanh"] = "linear"
     lact_gate_init: float = 0.0
 
@@ -132,6 +133,10 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
             raise ValueError(
                 "lact_chunk_query requires macro temporal compression factor 1 "
                 "and mode 'auto'"
+            )
+        if not self.lact_chunk_query and self.lact_chunk_query_mode != "single":
+            raise ValueError(
+                "lact_chunk_query_mode requires lact_chunk_query=True"
             )
 
     def build(self):

@@ -66,9 +66,13 @@ def test_existing_auto_modes_preserve_base_and_lact_defaults():
 def test_chunk_query_uses_one_placeholder_per_existing_four_frame_chunk():
     tokenize_fn = VideoChat3TokenizeFunction.__new__(VideoChat3TokenizeFunction)
     tokenize_fn.lact_chunk_query = True
-    tokenize_fn.video_processor = SimpleNamespace(temporal_merge_size=4)
+    tokenize_fn.lact_chunk_query_mode = "single"
+    tokenize_fn.video_processor = SimpleNamespace(temporal_merge_size=4, merge_size=2)
 
     assert tokenize_fn._get_number_of_video_tokens((9, 16, 16)) == 3
+
+    tokenize_fn.lact_chunk_query_mode = "spatial_quarter"
+    assert tokenize_fn._get_number_of_video_tokens((9, 16, 16)) == 48
 
 
 def test_base_macro_export_records_video_last_mode(tmp_path):
