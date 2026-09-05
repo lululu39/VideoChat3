@@ -937,7 +937,7 @@ Conclusion: serial changes mIoU relative to matched parallel v24 by `+0.30/+0.91
 
 ## v26 - Parallel Base-R4-Budget Queries, Train ViT + FW + Projector
 
-**Status:** Training completed at step 276/276; checkpoint diagnostics are complete and native TimeLens-Bench evaluation is pending.
+**Status:** Training completed at step 276/276; checkpoint diagnostics and native TimeLens-Bench evaluation are complete.
 
 - Objective: test whether v24's FW-only vision scope suppresses gate learning by repeating v24 while unfreezing the original ViT; train original ViT, all LACT-added parameters including gates/query bank, and projector together.
 - Initialization: identical to v24, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state/gates, and the same seed-42 16-slot truncated-normal query bank initialization.
@@ -956,3 +956,17 @@ Startup validation: FSDP reports `416.9M` original ViT, `143.9M` LACT-added, and
 Training completion: v26 finished in `10,998.37s` and saved `20260905152729/hf-276`. First/final CE is `0.7541/0.2366`; first/last-20 mean is `0.5346/0.2606`, substantially below v24's `0.5650/0.3652`. Pre-clip grad norm mean/median/max is `7.110/4.380/164.890`, with the maximum at step 13; all 276 steps exceed the global clip threshold but remain finite. Maximum allocated/reserved memory is `29.34/31.48 GB`.
 
 Checkpoint inspection `20260905152729/checkpoint_inspection.json` shows gate RMS/mean-absolute/max-absolute `2.03e-4/1.61e-4/9.92e-4`, lower than v24's `2.92e-4/2.30e-4/1.43e-3`. FW private/value relative L2 deltas also fall from v24's `0.751%/0.865%` to `0.481%/0.576%`, while projector delta falls from `1.351%` to `1.218%`. The newly trainable original attention/MLP/other-ViT relative deltas are `0.689%/0.325%/0.0267%`; the 4B LM remains bitwise unchanged. Joint global clipping therefore lets the original ViT absorb most adaptation and reduces, rather than improves, gate/FW movement.
+
+### TimeLens-Bench Native Evaluation
+
+**Status:** Completed on all 9,404 queries with no missing predictions. Fixed native generation/scoring protocol is identical to v24/v25 and Base R4: 2 FPS, up to 448 frames, 224px/14,680,064-total-pixel budget.
+
+| Subset | Base R4 R1@0.3 | v26 R1@0.3 | Delta | Base R1@0.5 | v26 R1@0.5 | Delta | Base R1@0.7 | v26 R1@0.7 | Delta | Base mIoU | v26 mIoU | Delta |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Charades-TimeLens | `46.57%` | `53.37%` | `+6.80` | `31.46%` | `41.09%` | `+9.63` | `13.92%` | `20.37%` | `+6.45` | `31.48%` | `36.98%` | `+5.50` |
+| ActivityNet-TimeLens | `46.20%` | `49.53%` | `+3.33` | `34.42%` | `40.18%` | `+5.76` | `21.20%` | `26.20%` | `+5.00` | `33.59%` | `37.55%` | `+3.96` |
+| QVHighlights-TimeLens | `67.10%` | `61.84%` | `-5.26` | `54.57%` | `51.07%` | `-3.50` | `38.87%` | `37.96%` | `-0.91` | `50.42%` | `48.75%` | `-1.67` |
+
+Config: `vlmevalkit-videochat3/configs/videochat3_v26_timelens_bench.json`; launcher: `scripts/eval_videochat3_v26_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v26-timelens-bench/VideoChat3-4B-LACT-v26/T20260905_G15376488`.
+
+Conclusion: unfreezing the original ViT is decisive for learned-query compression. Relative to matched FW/projector-only v24, v26 improves mIoU by `+21.38/+26.25/+40.97` points on Charades/ActivityNet/QVHighlights. It exceeds Base R4 by `+5.50/+3.96` mIoU on Charades/ActivityNet and trails it by only `1.67` on QVHighlights, although it remains `4.41/6.02/6.25` below the full-token v15 Base. Because v26's gate and FW projection changes are smaller than v24's, this recovery comes from adapting the original ViT to produce query-readable summaries, not from stronger FW/gate learning.
