@@ -37,6 +37,8 @@ def export_macro_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
     vision_config["macro_temporal_compression_mode"] = (
         model_config.vision_config.macro_temporal_compression_mode
     )
+    vision_config["chunk_query"] = model_config.vision_config.chunk_query
+    vision_config["chunk_query_mode"] = model_config.vision_config.chunk_query_mode
     temporary_config_path = config_path.with_suffix(".json.tmp")
     temporary_config_path.write_text(
         json.dumps(config, indent=2, ensure_ascii=False) + "\n"
@@ -55,6 +57,10 @@ def export_macro_hf_artifacts(hf_dir: str | Path, model_config: Any) -> None:
     )
     processor_config["macro_temporal_compression_mode"] = (
         model_config.vision_config.macro_temporal_compression_mode
+    )
+    processor_config["chunk_query"] = model_config.vision_config.chunk_query
+    processor_config["chunk_query_mode"] = (
+        model_config.vision_config.chunk_query_mode
     )
     processor_config.setdefault("auto_map", {})["AutoProcessor"] = (
         "processing_videochat3_macro.VideoChat3MacroProcessor"

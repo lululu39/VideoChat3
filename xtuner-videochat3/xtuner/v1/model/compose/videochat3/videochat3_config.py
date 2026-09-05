@@ -38,6 +38,8 @@ class VideoChat3VisionConfig(BaseModel):
         "select_last",
         "video_last",
     ] = "auto"
+    chunk_query: bool = False
+    chunk_query_mode: Literal["single", "spatial_quarter"] = "single"
     init_pos_emb_height: int = 64  # 新增
     init_pos_emb_width: int = 64  # 新增
     in_channels: int = 3
@@ -54,6 +56,16 @@ class VideoChat3VisionConfig(BaseModel):
 
         validate_macro_temporal_compression_factor(self.macro_temporal_compression_factor)
         validate_macro_temporal_compression_mode(self.macro_temporal_compression_mode)
+        if self.chunk_query and (
+            self.macro_temporal_compression_factor != 1
+            or self.macro_temporal_compression_mode != "auto"
+        ):
+            raise ValueError(
+                "chunk_query requires macro temporal compression factor 1 "
+                "and mode 'auto'"
+            )
+        if not self.chunk_query and self.chunk_query_mode != "single":
+            raise ValueError("chunk_query_mode requires chunk_query=True")
         if not is_installed("flash-attn") and self.attn_impl == "flash_attention_2":
             logger.warning("flash-attn-2 is not installed, using `eager_attention` instead.")
             self.attn_impl = "eager_attention"

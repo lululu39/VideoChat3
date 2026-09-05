@@ -188,7 +188,10 @@ class VideoChat3ForConditionalGeneration(BaseModel):
                 export_lact_hf_artifacts(hf_dir, self.config)
             if dist.is_initialized():
                 dist.barrier()
-        elif self.config.vision_config.macro_temporal_compression_factor > 1:
+        elif (
+            self.config.vision_config.macro_temporal_compression_factor > 1
+            or self.config.vision_config.chunk_query
+        ):
             if not dist.is_initialized() or dist.get_rank() == 0:
                 from .hf_macro_export import export_macro_hf_artifacts
 

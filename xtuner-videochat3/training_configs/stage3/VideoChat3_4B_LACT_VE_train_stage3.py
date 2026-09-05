@@ -53,8 +53,13 @@ macro_temporal_compression_mode = os.getenv(
 )
 model_variant = os.getenv("VIDEOCHAT3_MODEL_VARIANT", "lact")
 train_projector = env_bool("VIDEOCHAT3_TRAIN_PROJECTOR")
-lact_chunk_query = model_variant == "lact" and env_bool(
-    "VIDEOCHAT3_LACT_CHUNK_QUERY"
+chunk_query = env_bool(
+    "VIDEOCHAT3_CHUNK_QUERY",
+    env_bool("VIDEOCHAT3_LACT_CHUNK_QUERY"),
+)
+chunk_query_mode = os.getenv(
+    "VIDEOCHAT3_CHUNK_QUERY_MODE",
+    os.getenv("VIDEOCHAT3_LACT_CHUNK_QUERY_MODE", "single"),
 )
 
 if model_variant == "lact":
@@ -69,11 +74,8 @@ if model_variant == "lact":
             inner_optim=os.getenv("VIDEOCHAT3_INNER_OPTIM", "muon"),
             fw_order=os.getenv("VIDEOCHAT3_FW_ORDER", "serial"),
             lact_3d_rope=env_bool("VIDEOCHAT3_LACT_3D_ROPE"),
-            lact_chunk_query=lact_chunk_query,
-            lact_chunk_query_mode=os.getenv(
-                "VIDEOCHAT3_LACT_CHUNK_QUERY_MODE",
-                "single",
-            ),
+            lact_chunk_query=chunk_query,
+            lact_chunk_query_mode=chunk_query_mode,
             lact_gate=os.getenv("VIDEOCHAT3_LACT_GATE", "linear"),
             lact_gate_init=float(os.getenv("VIDEOCHAT3_LACT_GATE_INIT", "0")),
             clip_ns_grad_ratio=False,
@@ -98,6 +100,8 @@ elif model_variant == "base-vit-projector":
             attn_impl="flash_attention_2",
             macro_temporal_compression_factor=macro_temporal_compression_factor,
             macro_temporal_compression_mode=macro_temporal_compression_mode,
+            chunk_query=chunk_query,
+            chunk_query_mode=chunk_query_mode,
         ),
     )
 else:
@@ -184,11 +188,8 @@ for name, data in dataset_collections.items():
                 video_frame_multiple=data.get("video_frame_multiple", 1),
                 macro_temporal_compression_factor=macro_temporal_compression_factor,
                 macro_temporal_compression_mode=macro_temporal_compression_mode,
-                lact_chunk_query=lact_chunk_query,
-                lact_chunk_query_mode=os.getenv(
-                    "VIDEOCHAT3_LACT_CHUNK_QUERY_MODE",
-                    "single",
-                ),
+                lact_chunk_query=chunk_query,
+                lact_chunk_query_mode=chunk_query_mode,
                 processor_path=str(model_path),
                 data_augment=data.get("data_augment", False),
                 system_message=data.get("system_message"),

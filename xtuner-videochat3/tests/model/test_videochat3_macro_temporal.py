@@ -21,6 +21,9 @@ from xtuner.v1.model.compose.videochat3.macro_temporal import (  # noqa: E402
 from xtuner.v1.model.compose.videochat3.hf_macro_export import (  # noqa: E402
     export_macro_hf_artifacts,
 )
+from xtuner.v1.model.compose.videochat3.videochat3_config import (  # noqa: E402
+    VideoChat3VisionConfig,
+)
 from xtuner.v1.datasets.mllm_tokenize_fn.videochat3_tokenize_fn import (  # noqa: E402
     VideoChat3TokenizeFunction,
 )
@@ -84,6 +87,8 @@ def test_base_macro_export_records_video_last_mode(tmp_path):
         vision_config=SimpleNamespace(
             macro_temporal_compression_factor=4,
             macro_temporal_compression_mode="video_last",
+            chunk_query=False,
+            chunk_query_mode="single",
         )
     )
 
@@ -93,3 +98,53 @@ def test_base_macro_export_records_video_last_mode(tmp_path):
     saved_processor = json.loads((tmp_path / "processor_config.json").read_text())
     assert saved_config["vision_config"]["macro_temporal_compression_mode"] == "video_last"
     assert saved_processor["macro_temporal_compression_mode"] == "video_last"
+
+
+def test_base_spatial_quarter_query_returns_multiple_summaries_per_chunk():
+    torch.manual_seed(37)
+    model = VideoChat3VisionConfig(
+        hidden_size=16,
+        intermediate_size=32,
+        num_attention_heads=4,
+        num_hidden_layers=2,
+        patch_size=2,
+        merge_kernel_size=[2, 2],
+        temporal_merge_size=4,
+        init_pos_emb_height=4,
+        init_pos_emb_width=8,
+        attn_impl="eager_attention",
+        chunk_query=True,
+        chunk_query_mode="spatial_quarter",
+    ).build()
+    grid_thws = torch.tensor([[8, 4, 8]], dtype=torch.int32)
+    outputs = model(torch.randn(256, 12), grid_thws)
+
+    assert len(outputs) == 4
+    assert all(output.shape == (1, 4, 16) for output in outputs)
+    assert model.chunk_query.shape == (16, 16)
+    assert not any("memory" in name for name, _ in model.named_parameters())
+    torch.cat(outputs).square().mean().backward()
+    assert model.chunk_query.grad is not None
+    assert torch.count_nonzero(model.chunk_query.grad[:2]).item() > 0
+
+
+def test_base_query_macro_export_and_processor_alignment(tmp_path):
+    (tmp_path / "config.json").write_text(
+        json.dumps({"vision_config": {}}), encoding="utf-8"
+    )
+    (tmp_path / "processor_config.json").write_text("{}", encoding="utf-8")
+    model_config = SimpleNamespace(
+        vision_config=SimpleNamespace(
+            macro_temporal_compression_factor=1,
+            macro_temporal_compression_mode="auto",
+            chunk_query=True,
+            chunk_query_mode="spatial_quarter",
+        )
+    )
+    export_macro_hf_artifacts(tmp_path, model_config)
+    saved_config = json.loads((tmp_path / "config.json").read_text())
+    saved_processor = json.loads((tmp_path / "processor_config.json").read_text())
+    assert saved_config["vision_config"]["chunk_query"] is True
+    assert saved_config["vision_config"]["chunk_query_mode"] == "spatial_quarter"
+    assert saved_processor["chunk_query"] is True
+    assert saved_processor["chunk_query_mode"] == "spatial_quarter"

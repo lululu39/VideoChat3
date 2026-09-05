@@ -1,4 +1,5 @@
 from functools import partial
+from pathlib import Path
 from torch import nn
 import torch
 import torch.nn.functional as F
@@ -56,6 +57,82 @@ from .macro_temporal import (
 DEVICE = get_device()
 DEVICE_MODULE = get_torch_device_module()
 logger = get_logger()
+
+
+def interleave_base_chunk_query_tokens(
+    hidden_states: torch.Tensor,
+    patch_lengths: list[int],
+    chunk_query: torch.Tensor,
+    query_counts: list[int],
+) -> tuple[torch.Tensor, list[int]]:
+    if sum(patch_lengths) != hidden_states.shape[0]:
+        raise ValueError(
+            f"patch_lengths={patch_lengths} do not cover {hidden_states.shape[0]} tokens"
+        )
+    if len(query_counts) != len(patch_lengths):
+        raise ValueError("query_counts and patch_lengths must have equal length")
+    query_bank = chunk_query.reshape(-1, chunk_query.shape[-1])
+    outputs = []
+    query_indices = []
+    patch_offset = 0
+    packed_offset = 0
+    for length, query_count in zip(patch_lengths, query_counts, strict=True):
+        if not 1 <= query_count <= query_bank.shape[0]:
+            raise ValueError(
+                f"query_count={query_count} exceeds query bank size {query_bank.shape[0]}"
+            )
+        outputs.append(hidden_states[patch_offset : patch_offset + length])
+        outputs.append(query_bank[:query_count])
+        query_indices.extend(
+            range(packed_offset + length, packed_offset + length + query_count)
+        )
+        patch_offset += length
+        packed_offset += length + query_count
+    return torch.cat(outputs, dim=0), query_indices
+
+
+def interleave_base_chunk_query_rope(
+    rope_freqs_cis: torch.Tensor,
+    patch_lengths: list[int],
+    query_counts: list[int],
+) -> torch.Tensor:
+    if sum(patch_lengths) != rope_freqs_cis.shape[0]:
+        raise ValueError(
+            f"patch_lengths={patch_lengths} do not cover {rope_freqs_cis.shape[0]} RoPE rows"
+        )
+    identity = torch.ones(
+        1,
+        rope_freqs_cis.shape[-1],
+        device=rope_freqs_cis.device,
+        dtype=rope_freqs_cis.dtype,
+    )
+    outputs = []
+    offset = 0
+    for length, query_count in zip(patch_lengths, query_counts, strict=True):
+        outputs.append(rope_freqs_cis[offset : offset + length])
+        outputs.append(identity.expand(query_count, -1))
+        offset += length
+    return torch.cat(outputs, dim=0)
+
+
+def base_chunk_query_counts(
+    grid_thws: torch.Tensor,
+    merge_kernel_size: list[int],
+    mode: str,
+) -> list[int]:
+    if mode not in ("single", "spatial_quarter"):
+        raise ValueError(f"Unsupported chunk query mode: {mode!r}")
+    merge_height, merge_width = merge_kernel_size
+    counts = []
+    for _, height, width in grid_thws.tolist():
+        if mode == "single":
+            counts.append(1)
+            continue
+        spatial_tokens = (int(height) // merge_height) * (
+            int(width) // merge_width
+        )
+        counts.append(max(1, spatial_tokens // 4))
+    return counts
 
 
 def init_world_mesh():
@@ -549,16 +626,39 @@ class VideoChat3VisionEncoder(nn.Module):
         self.final_layernorm = nn.LayerNorm(hidden_dim)
 
 
-    def forward(self, hidden_states: torch.Tensor, grid_thws: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        hidden_states: torch.Tensor,
+        grid_thws: torch.Tensor,
+        query_counts: list[int] | None = None,
+    ) -> torch.Tensor:
         rope_freqs_cis = self.rope_2d.get_freqs_cis(grid_thws=grid_thws)
-
-        lengths = torch.cat(
-            (
-                torch.zeros(1, device=hidden_states.device, dtype=grid_thws.dtype),
-                grid_thws[:, 0] * grid_thws[:, 1] * grid_thws[:, 2],
+        patch_lengths = (
+            grid_thws[:, 0] * grid_thws[:, 1] * grid_thws[:, 2]
+        ).tolist()
+        lengths = patch_lengths
+        if query_counts is not None:
+            rope_freqs_cis = interleave_base_chunk_query_rope(
+                rope_freqs_cis,
+                patch_lengths,
+                query_counts,
             )
+            lengths = [
+                int(length) + query_count
+                for length, query_count in zip(
+                    patch_lengths,
+                    query_counts,
+                    strict=True,
+                )
+            ]
+        offsets = [0]
+        for length in lengths:
+            offsets.append(offsets[-1] + int(length))
+        cu_seqlens = torch.tensor(
+            offsets,
+            device=hidden_states.device,
+            dtype=torch.int32,
         )
-        cu_seqlens = lengths.cumsum(dim=0, dtype=torch.int32)
 
         for _, block in enumerate(self.blocks):
             hidden_states = block(hidden_states, cu_seqlens, rope_freqs_cis=rope_freqs_cis)
@@ -620,6 +720,20 @@ class VideoChat3VisionModel(BaseModel):
             },
         )
 
+        self.chunk_query = (
+            nn.Parameter(
+                torch.empty(
+                    (16, config.hidden_size)
+                    if config.chunk_query_mode == "spatial_quarter"
+                    else (config.hidden_size,)
+                )
+            )
+            if config.chunk_query
+            else None
+        )
+        if self.chunk_query is not None:
+            nn.init.trunc_normal_(self.chunk_query, std=0.02)
+
         self._hf_prefix = "model.vision_tower."
         self._init_load_spec()
 
@@ -667,7 +781,36 @@ class VideoChat3VisionModel(BaseModel):
             num_tokens2 += t * h * w
         assert num_tokens == num_tokens2, f"{num_tokens} != {num_tokens2}, {old_grid_thws} / {grid_thws}"
         hidden_states = self.patch_embed(pixel_values, grid_thws)
-        hidden_states = self.encoder(hidden_states, grid_thws)
+        query_indices = None
+        query_counts = None
+        if self.chunk_query is not None:
+            patch_lengths = (
+                grid_thws[:, 0] * grid_thws[:, 1] * grid_thws[:, 2]
+            ).tolist()
+            query_counts = base_chunk_query_counts(
+                grid_thws,
+                self.config.merge_kernel_size,
+                self.config.chunk_query_mode,
+            )
+            hidden_states, query_indices = interleave_base_chunk_query_tokens(
+                hidden_states,
+                patch_lengths,
+                self.chunk_query,
+                query_counts,
+            )
+        hidden_states = self.encoder(
+            hidden_states,
+            grid_thws,
+            query_counts=query_counts,
+        )
+        if query_indices is not None:
+            merge_area = math.prod(self.config.merge_kernel_size)
+            return [
+                hidden_states[index]
+                .reshape(1, 1, -1)
+                .expand(1, merge_area, -1)
+                for index in query_indices
+            ]
         chunk_outputs = patch_merger(
             hidden_states,
             grid_thws,
@@ -682,6 +825,29 @@ class VideoChat3VisionModel(BaseModel):
                 default="mean",
             ),
         )
+
+    @override
+    def from_hf(self, hf_path: str | Path, strict: bool = True) -> tuple:
+        loaded, unloaded, missing = super().from_hf(hf_path, strict=False)
+        if self.chunk_query is None:
+            if strict and missing:
+                raise RuntimeError(f"Missing Base vision parameters: {sorted(missing)}")
+            return loaded, unloaded, missing
+        query_local_keys = {"chunk_query"}
+        query_hf_keys = {
+            hf_key
+            for key in query_local_keys
+            for hf_key in self.to_hf_key_list(key)
+        }
+        missing_query = missing & query_hf_keys
+        missing_base = missing - query_hf_keys
+        if missing_query:
+            nn.init.trunc_normal_(self.chunk_query, std=0.02)
+        if strict and missing_base:
+            raise RuntimeError(
+                f"Missing Base vision parameters: {sorted(missing_base)}"
+            )
+        return loaded, unloaded - query_local_keys, missing_base
 
     def to_hf_key_list(self, key: str) -> list[str]:
         return [self._hf_prefix + key]

@@ -12,6 +12,8 @@ class VideoChat3MacroVisionConfig(VideoChat3VisionConfig):
         self,
         macro_temporal_compression_factor: int = 1,
         macro_temporal_compression_mode: str = "auto",
+        chunk_query: bool = False,
+        chunk_query_mode: str = "single",
         **kwargs: Any,
     ):
         super().__init__(**kwargs)
@@ -33,6 +35,23 @@ class VideoChat3MacroVisionConfig(VideoChat3VisionConfig):
             )
         self.macro_temporal_compression_factor = macro_temporal_compression_factor
         self.macro_temporal_compression_mode = macro_temporal_compression_mode
+        if chunk_query_mode not in ("single", "spatial_quarter"):
+            raise ValueError(
+                "chunk_query_mode must be 'single' or 'spatial_quarter', "
+                f"got {chunk_query_mode!r}"
+            )
+        if chunk_query and (
+            macro_temporal_compression_factor != 1
+            or macro_temporal_compression_mode != "auto"
+        ):
+            raise ValueError(
+                "chunk_query requires macro temporal compression factor 1 "
+                "and mode 'auto'"
+            )
+        if not chunk_query and chunk_query_mode != "single":
+            raise ValueError("chunk_query_mode requires chunk_query=True")
+        self.chunk_query = bool(chunk_query)
+        self.chunk_query_mode = chunk_query_mode
 
 
 class VideoChat3MacroConfig(VideoChat3Config):

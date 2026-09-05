@@ -8,9 +8,11 @@ import torch
 
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
 from xtuner.v1.model.compose.videochat3.videochat3_config import (
+    VideoChat3Dense4BConfig,
     VideoChat3LACTDense4BConfig,
     VideoChat3LACTVisionConfig,
     VideoChat3ProjectorConfig,
+    VideoChat3VisionConfig,
 )
 from xtuner.v1.model.dense.qwen3 import Qwen3Dense4BConfig
 from xtuner.v1.module.attention import MHAConfig
@@ -65,6 +67,57 @@ def _tiny_model_config():
         tie_word_embeddings=False,
     )
     return VideoChat3LACTDense4BConfig(
+        vision_config=vision_config,
+        projector_config=VideoChat3ProjectorConfig(
+            vision_hidden_size=16,
+            text_hidden_size=32,
+            merge_kernel_size=[2, 2],
+        ),
+        text_config=text_config,
+        image_token_id=100,
+        video_token_id=101,
+        vision_start_token_id=102,
+        vision_end_token_id=103,
+    )
+
+
+def _tiny_base_query_model_config():
+    vision_config = VideoChat3VisionConfig(
+        hidden_size=16,
+        intermediate_size=32,
+        num_attention_heads=4,
+        num_hidden_layers=2,
+        patch_size=2,
+        merge_kernel_size=[2, 2],
+        temporal_merge_size=4,
+        init_pos_emb_height=4,
+        init_pos_emb_width=8,
+        attn_impl="eager_attention",
+        chunk_query=True,
+        chunk_query_mode="spatial_quarter",
+    )
+    text_config = Qwen3Dense4BConfig(
+        vocab_size=128,
+        max_position_embeddings=128,
+        eos_token_id=1,
+        bos_token_id=0,
+        num_hidden_layers=1,
+        max_window_layers=1,
+        hidden_size=32,
+        intermediate_size=64,
+        rms_norm_eps=1e-6,
+        rope_theta=10000.0,
+        hidden_act="silu",
+        attention=MHAConfig(
+            num_attention_heads=4,
+            num_key_value_heads=2,
+            head_dim=8,
+            qk_norm=True,
+            sliding_window=None,
+        ),
+        tie_word_embeddings=False,
+    )
+    return VideoChat3Dense4BConfig(
         vision_config=vision_config,
         projector_config=VideoChat3ProjectorConfig(
             vision_hidden_size=16,
@@ -284,3 +337,55 @@ def test_hf_interval_save_loads_independent_lact_model(tmp_path):
             rtol=2e-5,
             atol=2e-6,
         )
+
+
+@pytest.mark.skipif(
+    not (OFFICIAL_CHECKPOINT / "modeling_videochat3.py").is_file(),
+    reason="Official VideoChat3 remote code is not available",
+)
+def test_hf_interval_save_loads_base_chunk_query_model(tmp_path):
+    model_config = _tiny_base_query_model_config()
+    base_path = tmp_path / "base"
+    save_path = tmp_path / "saved"
+    base_path.mkdir()
+    for file_name in ("configuration_videochat3.py", "modeling_videochat3.py"):
+        shutil.copy2(OFFICIAL_CHECKPOINT / file_name, base_path / file_name)
+    _write_tiny_base_config(base_path, model_config)
+
+    model = model_config.build()
+    assert not any("memory" in name for name, _ in model.named_parameters())
+    model.set_hf(base_path)
+    model.save_hf(save_path, save_dtype=torch.bfloat16)
+
+    saved_config = json.loads((save_path / "config.json").read_text())
+    saved_processor = json.loads((save_path / "processor_config.json").read_text())
+    assert saved_config["model_type"] == "videochat3_macro"
+    assert saved_config["vision_config"]["chunk_query"] is True
+    assert saved_config["vision_config"]["chunk_query_mode"] == "spatial_quarter"
+    assert saved_processor["chunk_query"] is True
+    assert saved_processor["chunk_query_mode"] == "spatial_quarter"
+
+    hf_config = AutoConfig.from_pretrained(save_path, trust_remote_code=True)
+    assert hf_config.vision_config.chunk_query is True
+    assert hf_config.vision_config.chunk_query_mode == "spatial_quarter"
+    hf_model, loading_info = AutoModelForCausalLM.from_pretrained(
+        save_path,
+        trust_remote_code=True,
+        dtype=torch.bfloat16,
+        output_loading_info=True,
+    )
+    assert not loading_info["missing_keys"]
+    assert not loading_info["unexpected_keys"]
+    assert not loading_info["mismatched_keys"]
+    assert hf_model.model.vision_tower.chunk_query.shape == (16, 16)
+    assert not any("memory" in name for name, _ in hf_model.named_parameters())
+
+    hf_model.float()
+    for block in hf_model.model.vision_tower.encoder.blocks:
+        block.attn_impl = "sdpa"
+    outputs = hf_model.model.vision_tower(
+        torch.randn(256, 12),
+        torch.tensor([[8, 4, 8]], dtype=torch.int32),
+    )
+    assert len(outputs) == 4
+    assert all(output.shape == (1, 4, 16) for output in outputs)

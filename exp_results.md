@@ -970,3 +970,19 @@ Checkpoint inspection `20260905152729/checkpoint_inspection.json` shows gate RMS
 Config: `vlmevalkit-videochat3/configs/videochat3_v26_timelens_bench.json`; launcher: `scripts/eval_videochat3_v26_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v26-timelens-bench/VideoChat3-4B-LACT-v26/T20260905_G15376488`.
 
 Conclusion: unfreezing the original ViT is decisive for learned-query compression. Relative to matched FW/projector-only v24, v26 improves mIoU by `+21.38/+26.25/+40.97` points on Charades/ActivityNet/QVHighlights. It exceeds Base R4 by `+5.50/+3.96` mIoU on Charades/ActivityNet and trails it by only `1.67` on QVHighlights, although it remains `4.41/6.02/6.25` below the full-token v15 Base. Because v26's gate and FW projection changes are smaller than v24's, this recovery comes from adapting the original ViT to produce query-readable summaries, not from stronger FW/gate learning.
+
+## v27 - Base Vision + Base-R4-Budget Per-Chunk Queries, Train ViT + Projector
+
+**Status:** Launcher prepared; training is pending.
+
+- Objective: isolate whether v26 benefits from FW memory at all by removing the entire LACT/FW branch and training a true Base vision encoder with the identical learned-query interface; compare Base+query ViT/projector adaptation against v26's ViT/FW/projector adaptation.
+- Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B`; all 734 original tensors load unchanged, and a seed-42 16-slot query bank is initialized with truncated normal standard deviation `0.02`.
+- Data: identical seed-42 12,624-row TimeLens random-half manifest and exact v24-v26 4,401-pack query-aware cache, preserving sample order and LM token layout.
+- Trainable scope: all `416,870,640` original ViT parameters, the 18,432-element query bank, and all `33,039,616` projector parameters (`449,928,688` total); the 4B LM is frozen and no FW parameters exist.
+- Vision/query path: standard Base packed four-frame local attention and slow MLP only. Each chunk appends `max(1,floor(S/4))` shared learned queries before layer 1; queries use identity vision RoPE, participate in all 27 attention/MLP blocks, and are the only retained vision outputs. Standard 224 input yields 16 queries/chunk, matching Base R4 over complete four-chunk groups. There is no FW read, update, recurrent state, private projection, or gate.
+- Optimizer/LR schedule: identical to v26 for surviving groups, uniform ViT/query/projector AdamW with 3% warmup and cosine `2e-5 -> 1e-6`, weight decay 0, and one epoch.
+- Stabilization: XTuner global gradient clip 1.0; no FW stabilization exists.
+- Hardware/batch/sequence: identical to v26, 8xH100 ordinary FSDP, global batch 16, 4K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, 4,401 packs, and 276 optimizer steps.
+- Training W&B: [`v27`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-base-r4query-vitproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v27).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_BASE_R4QUERY_VITPROJ_train_timelens_v27.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-base-r4query-vitproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v27/<timestamp>/hf-276`.
