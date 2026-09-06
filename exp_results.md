@@ -1048,3 +1048,19 @@ Checkpoint inspection `20260905234613/checkpoint_inspection.json` gives gate RMS
 Config: `vlmevalkit-videochat3/configs/videochat3_v28_timelens_bench.json`; launcher: `scripts/eval_videochat3_v28_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v28-timelens-bench/VideoChat3-4B-LACT-v28/T20260906_G54a50747`.
 
 Conclusion: serial topology destroys the successful v26 joint-adaptation result. Relative to bitwise-matched parallel v26, v28 loses `21.61/30.59/42.60` mIoU on Charades/ActivityNet/QVHighlights and is only `+1.30/-0.17/+1.33` above no-FW v27. It also trails FW/projector-only serial v25 by `0.53/5.25/1.70`. Gate RMS is unchanged, so gate magnitude is not predictive of functional memory use. The parallel branch's pre-attention state interface is essential here; serial FW writes/reads the evolving post-attention representation, produces large early clipped gradients, then collapses to a low-gradient/high-loss solution under joint ViT training.
+
+## v29 - Parallel Video-Last, Train ViT + FW + Projector
+
+**Status:** Launcher prepared; training is pending.
+
+- Objective: test the remaining interaction between successful v26-style parallel joint adaptation and the previously failed final-chunk-only output. Repeat v19 exactly while adding the original ViT to the trainable scope.
+- Initialization: identical to v19, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state/gates, and no chunk-query parameters.
+- Data: identical seed-42 12,624-row TimeLens random-half manifest and exact v19 1,815-pack cache, preserving samples and order.
+- Trainable scope: all `416,870,640` original ViT parameters, all `143,887,104` LACT-added parameters, and all `33,039,616` projector parameters (`593,797,360` total); only the 4B LM is frozen.
+- Memory/update/output: identical to v19, parallel Linear16+Delta group-1 continuous state, fast-Q/K 3D RoPE, zero-initialized linear gates, apply-then-update, final update skip, and `video_last` output retaining only the final chunk's spatial grid/timestamp for each video.
+- Optimizer/LR schedule: identical to v19 for all live groups, uniform ViT/FW/gate/projector AdamW with 3% warmup and cosine `2e-5 -> 1e-6`, weight decay 0, one epoch, inner Delta write strength `0.01`, and no gate-specific LR.
+- Stabilization: identical to v19, no FW ratio clip or NS5; XTuner global gradient clip 1.0 covers ViT, FW, and projector jointly.
+- Hardware/batch/sequence: identical to v19, 8xH100 ordinary FSDP, global batch 16, 1K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, 1,815 packs, and 114 optimizer steps. The run is launched with `GPU_EXCLUSIVE=0` to coexist with low-memory external jobs; no watchdog may terminate them. Because v19 already peaked near 77 GB, adding ViT gradients has a narrow memory margin and step 1 is the acceptance gate.
+- Training W&B: [`v29`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-lastchunk-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v29).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_LASTCHUNK_VITFWPROJ_train_timelens_v29.sh`.
+- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-lastchunk-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v29/<timestamp>/hf-114`.
