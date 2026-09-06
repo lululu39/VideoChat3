@@ -452,7 +452,7 @@ Conclusion: untrained R4 mean compression costs `7.90/5.20/8.28` points on Video
 
 ### v10 Trained-Checkpoint TimeLens-Bench
 
-**Status:** Evaluation prepared from the retained local `20260901040051/hf-93`; native generation/scoring is pending. Config: `vlmevalkit-videochat3/configs/videochat3_v10_timelens_bench.json`; launcher: `scripts/eval_videochat3_v10_timelens_bench.sh`; expected artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v10-trained-timelens-bench/VideoChat3-4B-Base-R4-v10-trained/<timestamp>`.
+**Status:** Evaluation stopped during checkpoint-shard loading because unrelated GPU training jobs were active; no generation, predictions, or scores were produced. The retained `20260901040051/hf-93` is intact. Config: `vlmevalkit-videochat3/configs/videochat3_v10_timelens_bench.json`; launcher: `scripts/eval_videochat3_v10_timelens_bench.sh`; expected artifacts after a later clean rerun: `/mnt/localssd/VideoChat3/eval/videochat3-v10-trained-timelens-bench/VideoChat3-4B-Base-R4-v10-trained/<timestamp>`.
 
 ### Base R4 Mean-Init TimeLens-Bench
 
