@@ -1009,7 +1009,7 @@ Conclusion: Base+query without FW fails despite jointly training ViT/query/proje
 
 ## v28 - Serial Base-R4-Budget Queries, Train ViT + FW + Projector
 
-**Status:** Clean restart active at step 3/276 on public W&B; startup validation is complete.
+**Status:** Clean training completed at step 276/276; checkpoint diagnostics are complete and native TimeLens-Bench evaluation is pending.
 
 - Objective: isolate FW block topology under successful joint adaptation by repeating v26 with `fw_order="serial"` as the only model/training change; compare against v26 parallel and the FW-only v24/v25 topology pair.
 - Initialization: identical to v26, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state/gates, and the same seed-42 16-slot truncated-normal query bank initialization.
@@ -1026,3 +1026,7 @@ Conclusion: Base+query without FW fails despite jointly training ViT/query/proje
 The first launch was stopped after step 2 with no checkpoint: the new Base-query parent loader incorrectly consumed one extra LACT query initialization before the normal Linear reset, so step-1 CE failed to reproduce v26 despite the zero gate. The loader now restricts that initialization to `config.chunk_query=True`; the clean run uses a fresh W&B/run directory and must reproduce v26 step-1 CE exactly before it is accepted.
 
 Clean startup validation: step-1 CE exactly reproduces v26 at `0.75414109`, proving identical data, Base/query forward, and initialization under the zero gate. Serial/parallel step-1 pre-clip norms are `12.9409/13.0132`, reflecting only the topology-dependent gate derivative. Steps 2-3 remain finite at CE `0.71291/0.75585`, norms `17.5538/9.5524`, and equal ViT/FW/projector LRs `2.5e-6/5e-6`. FSDP reports the intended `416.9M` ViT, `143.9M` LACT-added, and `33.0M` projector groups; maximum observed allocation/reservation is `28.55/31.00 GB`. Active run directory `20260905234613`; native log `torchrun_logs/training_20260905_234556_datava270000004.log`.
+
+Training completion: v28 finished in `11,022.15s` and saved `20260905234613/hf-276`. First/final CE is `0.7541/0.3751`; first/last-20 mean is `0.5519/0.3912`, substantially above parallel v26's `0.5346/0.2606`. Pre-clip grad norm mean/median/max is `30.249/0.195/634.806`, with the maximum at step 20; 99/276 steps exceed 1, all values remain finite, and the low median reflects collapse after the large early clipped phase. Maximum allocated/reserved memory is `29.34/31.62 GB`.
+
+Checkpoint inspection `20260905234613/checkpoint_inspection.json` gives gate RMS/mean-absolute/max-absolute `2.05e-4/1.64e-4/8.01e-4`, nearly equal to v26's `2.03e-4/1.61e-4/9.92e-4`. Serial FW private/value relative L2 deltas are `0.355%/0.475%`, below parallel's `0.481%/0.576%`; original attention/MLP/other-ViT deltas are `0.635%/0.285%/0.0226%`, projector delta is `1.401%`, and the LM plus FW memory norm remain bitwise unchanged.
