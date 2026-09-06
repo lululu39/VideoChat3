@@ -1009,7 +1009,7 @@ Conclusion: Base+query without FW fails despite jointly training ViT/query/proje
 
 ## v28 - Serial Base-R4-Budget Queries, Train ViT + FW + Projector
 
-**Status:** Clean training completed at step 276/276; checkpoint diagnostics are complete and native TimeLens-Bench evaluation is pending.
+**Status:** Clean training completed at step 276/276; checkpoint diagnostics and native TimeLens-Bench evaluation are complete.
 
 - Objective: isolate FW block topology under successful joint adaptation by repeating v26 with `fw_order="serial"` as the only model/training change; compare against v26 parallel and the FW-only v24/v25 topology pair.
 - Initialization: identical to v26, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state/gates, and the same seed-42 16-slot truncated-normal query bank initialization.
@@ -1030,3 +1030,17 @@ Clean startup validation: step-1 CE exactly reproduces v26 at `0.75414109`, prov
 Training completion: v28 finished in `11,022.15s` and saved `20260905234613/hf-276`. First/final CE is `0.7541/0.3751`; first/last-20 mean is `0.5519/0.3912`, substantially above parallel v26's `0.5346/0.2606`. Pre-clip grad norm mean/median/max is `30.249/0.195/634.806`, with the maximum at step 20; 99/276 steps exceed 1, all values remain finite, and the low median reflects collapse after the large early clipped phase. Maximum allocated/reserved memory is `29.34/31.62 GB`.
 
 Checkpoint inspection `20260905234613/checkpoint_inspection.json` gives gate RMS/mean-absolute/max-absolute `2.05e-4/1.64e-4/8.01e-4`, nearly equal to v26's `2.03e-4/1.61e-4/9.92e-4`. Serial FW private/value relative L2 deltas are `0.355%/0.475%`, below parallel's `0.481%/0.576%`; original attention/MLP/other-ViT deltas are `0.635%/0.285%/0.0226%`, projector delta is `1.401%`, and the LM plus FW memory norm remain bitwise unchanged.
+
+### TimeLens-Bench Native Evaluation
+
+**Status:** Completed on all 9,404 queries with no missing predictions. Fixed native generation/scoring protocol is identical to v26 and Base R4: 2 FPS, up to 448 frames, 224px/14,680,064-total-pixel budget.
+
+| Subset | Base R4 R1@0.3 | v28 R1@0.3 | Delta | Base R1@0.5 | v28 R1@0.5 | Delta | Base R1@0.7 | v28 R1@0.7 | Delta | Base mIoU | v28 mIoU | Delta |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| Charades-TimeLens | `46.57%` | `22.99%` | `-23.58` | `31.46%` | `12.79%` | `-18.67` | `13.92%` | `4.85%` | `-9.07` | `31.48%` | `15.37%` | `-16.11` |
+| ActivityNet-TimeLens | `46.20%` | `8.04%` | `-38.16` | `34.42%` | `4.98%` | `-29.44` | `21.20%` | `3.00%` | `-18.20` | `33.59%` | `6.96%` | `-26.63` |
+| QVHighlights-TimeLens | `67.10%` | `7.01%` | `-60.09` | `54.57%` | `4.02%` | `-50.55` | `38.87%` | `2.27%` | `-36.60` | `50.42%` | `6.15%` | `-44.27` |
+
+Config: `vlmevalkit-videochat3/configs/videochat3_v28_timelens_bench.json`; launcher: `scripts/eval_videochat3_v28_timelens_bench.sh`; native artifacts: `/mnt/localssd/VideoChat3/eval/videochat3-v28-timelens-bench/VideoChat3-4B-LACT-v28/T20260906_G54a50747`.
+
+Conclusion: serial topology destroys the successful v26 joint-adaptation result. Relative to bitwise-matched parallel v26, v28 loses `21.61/30.59/42.60` mIoU on Charades/ActivityNet/QVHighlights and is only `+1.30/-0.17/+1.33` above no-FW v27. It also trails FW/projector-only serial v25 by `0.53/5.25/1.70`. Gate RMS is unchanged, so gate magnitude is not predictive of functional memory use. The parallel branch's pre-attention state interface is essential here; serial FW writes/reads the evolving post-attention representation, produces large early clipped gradients, then collapses to a low-gradient/high-loss solution under joint ViT training.
