@@ -1051,7 +1051,7 @@ Conclusion: serial topology destroys the successful v26 joint-adaptation result.
 
 ## v29 - Parallel Video-Last, Train ViT + FW + Projector
 
-**Status:** Launcher prepared; training is pending.
+**Status:** Queued for a clean rerun after the shared GPUs become free; no checkpoint or optimizer step exists.
 
 - Objective: test the remaining interaction between successful v26-style parallel joint adaptation and the previously failed final-chunk-only output. Repeat v19 exactly while adding the original ViT to the trainable scope.
 - Initialization: identical to v19, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state/gates, and no chunk-query parameters.
@@ -1064,3 +1064,5 @@ Conclusion: serial topology destroys the successful v26 joint-adaptation result.
 - Training W&B: [`v29`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-lastchunk-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v29).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_LASTCHUNK_VITFWPROJ_train_timelens_v29.sh`.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-lastchunk-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v29/<timestamp>/hf-114`.
+
+The first non-exclusive launch was stopped by the user before step 1 while all ranks were blocked on shared checkpoint I/O alongside three unrelated GPU jobs. It produced no training measurement, checkpoint, prediction, or reusable resume state; restart v29 from initialization when the GPUs are free.

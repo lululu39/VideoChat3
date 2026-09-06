@@ -27,7 +27,7 @@
 | v26 | Complete | V+F+P | 每 chunk `floor(S/4)` queries | parallel；在 v24 上解冻 ViT，形成成功的 ViT-query-FW 联合适配 | `276/276`, 4K | `0.261` | `7.110 / 4.380 / 164.890` | `2.03e-4` | **`36.98`** | **`37.55`** | **`48.75`** |
 | v27 | Complete | V+P | 每 chunk `floor(S/4)` queries | 真 Base+query，无任何 FW/memory/gate；测试 ViT adaptation 单独是否足够 | `276/276`, 4K | `0.389` | `3.154 / 0.164 / 80.866` | — | `14.07` | `7.13` | `4.82` |
 | v28 | Complete | V+F+P | 每 chunk `floor(S/4)` queries | v26 的 bitwise-matched serial control；修复 loader 后 step-1 CE 精确匹配 v26 | `276/276`, 4K | `0.391` | `30.249 / 0.195 / 634.806` | `2.05e-4` | `15.37` | `6.96` | `6.15` |
-| v29 | Pending | V+F+P | video-last | v19 唯一改变为解冻 ViT；检验 parallel joint adaptation 能否突破 final-chunk-only 瓶颈 | `0/114`, 1K | — | — | init `0` | — | — | — |
+| v29 | Queued; no step | V+F+P | video-last | v19 唯一改变为解冻 ViT；首次共享-GPU启动在 checkpoint I/O 阶段停止，待 GPU 空闲后从头运行 | `0/114`, 1K | — | — | init `0` | — | — | — |
 
 ## 从表格可以归纳的规律
 
