@@ -104,10 +104,11 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
             "mean",
             "select_last",
             "video_last",
+            "chunk_select_last",
         ):
             raise ValueError(
                 "macro_temporal_compression_mode must be one of "
-                "('auto', 'mean', 'select_last', 'video_last'), got "
+                "('auto', 'mean', 'select_last', 'video_last', 'chunk_select_last'), got "
                 f"{macro_temporal_compression_mode!r}"
             )
         if lact_inference_state_mode not in ("continuous", "reset_state"):

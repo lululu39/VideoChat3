@@ -37,6 +37,7 @@ class VideoChat3VisionConfig(BaseModel):
         "mean",
         "select_last",
         "video_last",
+        "chunk_select_last",
     ] = "auto"
     chunk_query: bool = False
     chunk_query_mode: Literal["single", "spatial_quarter"] = "single"

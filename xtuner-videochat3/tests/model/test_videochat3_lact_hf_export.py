@@ -1,12 +1,14 @@
 import json
 import os
 import shutil
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
 import torch
 
 from transformers import AutoConfig, AutoModelForCausalLM, AutoModelForImageTextToText
+from transformers.dynamic_module_utils import get_class_from_dynamic_module
 from xtuner.v1.model.compose.videochat3.videochat3_config import (
     VideoChat3Dense4BConfig,
     VideoChat3LACTDense4BConfig,
@@ -166,6 +168,80 @@ def _write_tiny_base_config(path: Path, model_config) -> None:
     (path / "processor_config.json").write_text(
         json.dumps({"processor_class": "VideoChat3Processor"}, indent=2)
     )
+
+
+@pytest.mark.parametrize("variant", ["lact", "macro"])
+@pytest.mark.skipif(not (OFFICIAL_CHECKPOINT / "modeling_videochat3.py").is_file(),
+                    reason="Official VideoChat3 remote code is not available")
+def test_chunk_select_last_hf_roundtrip_and_processor_layout(tmp_path, monkeypatch, variant):
+    config = _tiny_model_config() if variant == "lact" else _tiny_base_query_model_config()
+    query_flag = "lact_chunk_query" if variant == "lact" else "chunk_query"
+    updates = {
+        query_flag: False, f"{query_flag}_mode": "single",
+        "macro_temporal_compression_factor": 4,
+        "macro_temporal_compression_mode": "chunk_select_last",
+        "init_pos_emb_height": 4, "init_pos_emb_width": 8,
+    }
+    if variant == "lact":
+        updates.update(memory_type="linear", inner_optim="delta", fw_num_heads=4,
+                       lact_gate="linear", lact_gate_init=0.1, clip_state_grad_ratio=False)
+    config.vision_config = type(config.vision_config)(**(config.vision_config.model_dump() | updates))
+    base_path, save_path = tmp_path / "base", tmp_path / "saved"
+    base_path.mkdir()
+    for source in OFFICIAL_CHECKPOINT.glob("*.py"):
+        shutil.copy2(source, base_path / source.name)
+    _write_tiny_base_config(base_path, config)
+    model = config.build()
+    model.set_hf(base_path)
+    with torch.no_grad():
+        for tensor in model.state_dict().values():
+            if tensor.is_floating_point():
+                tensor.copy_(tensor.to(torch.bfloat16).float())
+    model.save_hf(save_path, save_dtype=torch.bfloat16)
+    saved = AutoConfig.from_pretrained(save_path, trust_remote_code=True)
+    assert saved.vision_config.macro_temporal_compression_mode == "chunk_select_last"
+    assert saved.vision_config.macro_temporal_compression_factor == 4
+    assert not getattr(saved.vision_config, query_flag)
+    processor_config = json.loads((save_path / "processor_config.json").read_text())
+    assert processor_config["macro_temporal_compression_mode"] == "chunk_select_last"
+    assert processor_config["macro_temporal_compression_factor"] == 4
+    hf_model, info = AutoModelForCausalLM.from_pretrained(
+        save_path, trust_remote_code=True, dtype=torch.float32, output_loading_info=True,
+    )
+    assert not info["missing_keys"] and not info["unexpected_keys"] and not info["mismatched_keys"]
+    assert not any("chunk_query" in name for name, _ in hf_model.named_parameters())
+    for block in hf_model.model.vision_tower.encoder.blocks:
+        block.attn_impl = "sdpa"
+    grids = torch.tensor([[9, 4, 8], [4, 2, 2]], dtype=torch.int32)
+    pixels = torch.randn(304, 12)
+    with torch.no_grad():
+        expected = model.vision_tower(pixels, grids)
+        actual = hf_model.model.vision_tower(pixels, grids)
+    assert [output.shape[0] for output in actual] == [2, 2, 2, 1]
+    for left, right in zip(actual, expected, strict=True):
+        torch.testing.assert_close(left, right, rtol=2e-5, atol=2e-6)
+
+    class_name = "VideoChat3LACTProcessor" if variant == "lact" else "VideoChat3MacroProcessor"
+    processor_cls = get_class_from_dynamic_module(f"processing_videochat3_{variant}.{class_name}", save_path)
+    processor = processor_cls.__new__(processor_cls)
+    processor.macro_temporal_compression_mode = "chunk_select_last"
+    processor.macro_temporal_compression_factor = 4
+    setattr(processor, query_flag, False)
+    setattr(processor, f"{query_flag}_mode", "single")
+    processor.video_token_id, processor.image_token_id = 101, 100
+    processor.tokenizer = SimpleNamespace(pad_token_id=0, eos_token_id=1, padding_side="right")
+    meta = SimpleNamespace(timestamps=list(range(9)))
+    assert processor._calculate_timestamps(meta) == [1.5, 5.5, 8.0]
+    ids = torch.tensor([[7] + [101] * 8 + [8] + [101] * 6 + [9] + [100] * 8 + [10]])
+    def parent_call(self, *args, **kwargs):
+        return {"input_ids": ids.clone(), "attention_mask": torch.ones_like(ids),
+                "position_trace": torch.arange(ids.numel()).unsqueeze(0), "pixel_values": pixels}
+    monkeypatch.setattr(processor_cls.__mro__[1], "__call__", parent_call)
+    result = processor()
+    assert result["input_ids"].tolist() == [[7, 101, 101, 8, 101, 9, 100, 100, 10]]
+    assert result["position_trace"].tolist() == [[0, 7, 8, 9, 15, 16, 23, 24, 25]]
+    assert result["attention_mask"].shape == result["input_ids"].shape
+    assert result["pixel_values"] is pixels
 
 
 def test_lact_only_config_freezes_every_original_vision_parameter():

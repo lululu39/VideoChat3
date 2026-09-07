@@ -87,10 +87,14 @@ def _compress_chunk_outputs(
         )
     if mode == "auto":
         mode = "mean"
-    if mode not in ("mean", "select_last", "video_last"):
+    if mode not in ("mean", "select_last", "video_last", "chunk_select_last"):
         raise ValueError(f"Unsupported macro temporal compression mode: {mode}")
     if factor == 1 and mode != "video_last":
         return chunk_outputs
+    if mode == "chunk_select_last":
+        if any(count <= 0 for count in video_clip_counts):
+            raise ValueError("video_clip_counts must be positive")
+        return [chunk[-max(1, chunk.shape[0] // factor):] for chunk in chunk_outputs]
     compressed = []
     offset = 0
     for clip_count in video_clip_counts:

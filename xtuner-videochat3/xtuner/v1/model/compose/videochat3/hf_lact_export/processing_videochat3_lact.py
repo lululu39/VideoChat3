@@ -31,10 +31,11 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
             "mean",
             "select_last",
             "video_last",
+            "chunk_select_last",
         ):
             raise ValueError(
                 "macro_temporal_compression_mode must be one of "
-                "('auto', 'mean', 'select_last', 'video_last'), got "
+                "('auto', 'mean', 'select_last', 'video_last', 'chunk_select_last'), got "
                 f"{macro_temporal_compression_mode!r}"
             )
         self.macro_temporal_compression_factor = macro_temporal_compression_factor
@@ -76,7 +77,7 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
             mode = "mean"
         if mode == "video_last":
             return [timestamps[-1]]
-        if factor == 1:
+        if factor == 1 or mode == "chunk_select_last":
             return timestamps
         if mode == "select_last":
             return [
@@ -91,7 +92,8 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
 
     def __call__(self, *args: Any, **kwargs: Any):
         outputs = super().__call__(*args, **kwargs)
-        if not self.lact_chunk_query or "input_ids" not in outputs:
+        select_spatial = self.macro_temporal_compression_mode == "chunk_select_last"
+        if (not self.lact_chunk_query and not select_spatial) or "input_ids" not in outputs:
             return outputs
 
         input_ids = outputs["input_ids"]
@@ -152,13 +154,23 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
         keep = torch.ones(row.shape[0], device=row.device, dtype=torch.bool)
         index = 0
         while index < row.shape[0]:
-            if row[index].item() != self.video_token_id:
+            select_spatial = self.macro_temporal_compression_mode == "chunk_select_last"
+            token_ids = {self.video_token_id}
+            if select_spatial:
+                token_ids.add(self.image_token_id)
+            token_id = row[index].item()
+            if token_id not in token_ids:
                 index += 1
                 continue
             end = index + 1
-            while end < row.shape[0] and row[end].item() == self.video_token_id:
+            while end < row.shape[0] and row[end].item() == token_id:
                 end += 1
             run_length = end - index
+            if select_spatial:
+                keep_count = max(1, run_length // self.macro_temporal_compression_factor)
+                keep[index : end - keep_count] = False
+                index = end
+                continue
             keep_count = (
                 1
                 if self.lact_chunk_query_mode == "single"

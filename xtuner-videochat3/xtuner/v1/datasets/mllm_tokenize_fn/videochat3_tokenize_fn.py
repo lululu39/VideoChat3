@@ -563,6 +563,10 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
                                         else video_grid_thw[current_video_idx][1:].prod()
                                         // merge_length
                                     )
+                                    if self.macro_temporal_compression_mode == "chunk_select_last":
+                                        frame_seqlen = max(
+                                            1, int(frame_seqlen) // self.macro_temporal_compression_factor
+                                        )
                                     video_tokens += f"<{curr_time:.1f} seconds>"
                                     video_tokens += (
                                         chat_template.image_start_token + chat_template.video_context_token * frame_seqlen + chat_template.image_end_token
@@ -663,6 +667,10 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             media_grid_thw.append(smart_get_image_thw(size, self.image_processor))
         media_grid_thw = torch.tensor(media_grid_thw, dtype=torch.int).reshape(-1, 3)  # type: ignore
         sum_media_grid_thw = media_grid_thw.prod(dim=1) // self.spatial_merge_length  # type: ignore
+        if self.macro_temporal_compression_mode == "chunk_select_last":
+            sum_media_grid_thw = (
+                sum_media_grid_thw // self.macro_temporal_compression_factor
+            ).clamp_min(1)
 
         messages = ChatMessages(messages=data_item["messages"])
         self._replace_image_token(messages, sum_media_grid_thw, add_vision_id=self.add_vision_id)
@@ -692,6 +700,11 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             grid_thw_merged = [grid_thw_merged]
             grid_thw = [grid_thw]
         grid_thw_merged = [merged_thw.prod() // self.spatial_merge_length for merged_thw in grid_thw_merged]  # type: ignore
+        if self.macro_temporal_compression_mode == "chunk_select_last":
+            grid_thw_merged = [
+                (count // self.macro_temporal_compression_factor).clamp_min(1)
+                for count in grid_thw_merged
+            ]
         messages = ChatMessages(messages=data_item["messages"])
         self._replace_image_token(messages, grid_thw_merged, add_vision_id=self.add_vision_id)  # type: ignore
         tokenized = messages.tokenize(self.tokenizer, self.chat_template)
@@ -851,6 +864,7 @@ class VideoChat3TokenizeFnConfig(BaseMLLMTokenizeFnConfig):
         "mean",
         "select_last",
         "video_last",
+        "chunk_select_last",
     ] = "auto"
     lact_chunk_query: bool = False
     lact_chunk_query_mode: Literal["single", "spatial_quarter"] = "single"

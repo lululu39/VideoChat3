@@ -1,5 +1,7 @@
 import torch
 import json
+import copy
+import pytest
 from types import SimpleNamespace
 
 
@@ -23,6 +25,7 @@ from xtuner.v1.model.compose.videochat3.hf_macro_export import (  # noqa: E402
 )
 from xtuner.v1.model.compose.videochat3.videochat3_config import (  # noqa: E402
     VideoChat3VisionConfig,
+    VideoChat3LACTVisionConfig,
 )
 from xtuner.v1.datasets.mllm_tokenize_fn.videochat3_tokenize_fn import (  # noqa: E402
     VideoChat3TokenizeFunction,
@@ -40,6 +43,97 @@ def test_video_last_keeps_one_final_chunk_per_video():
     )
 
     assert [item.item() for item in compressed] == [2.0, 4.0]
+
+
+def test_chunk_select_last_keeps_spatial_tails_and_their_gradients():
+    chunks = [torch.randn(size, 4, 2, requires_grad=True) for size in (64, 64, 64, 64, 6, 1)]
+    outputs = compress_chunk_outputs(chunks, [4, 2], 4, mode="chunk_select_last")
+    assert [item.shape[0] for item in outputs] == [16, 16, 16, 16, 1, 1]
+    for original, selected in zip(chunks, outputs, strict=True):
+        torch.testing.assert_close(selected, original[-selected.shape[0]:], rtol=0, atol=0)
+    sum(item.sum() for item in outputs).backward()
+    for original, selected in zip(chunks, outputs, strict=True):
+        expected = torch.zeros_like(original)
+        expected[-selected.shape[0]:] = 1
+        torch.testing.assert_close(original.grad, expected, rtol=0, atol=0)
+    assert compress_chunk_outputs(chunks, [4, 2], 1, mode="chunk_select_last") is chunks
+    timestamps = [0.5, 1.5, 2.5, 3.5, 4.0]
+    assert compress_timestamps(timestamps, 4, mode="chunk_select_last") == timestamps
+    assert macro_clip_count(5, 4, mode="chunk_select_last") == 5
+
+
+@pytest.mark.parametrize("factor", [1, 2, 4, 8])
+def test_chunk_select_last_counts_all_chunks_including_short_tails(factor):
+    for frames in (1, 4, 9, 64, 224, 448):
+        for height, width in ((2, 2), (4, 6), (6, 6), (12, 16), (16, 16)):
+            actual = macro_video_token_count(
+                (frames, height, width), temporal_merge_size=4,
+                spatial_merge_size=2, factor=factor, mode="chunk_select_last",
+            )
+            assert actual == ((frames + 3) // 4) * max(1, (height * width // 4) // factor)
+
+
+def test_chunk_select_last_matches_query_placeholder_layout():
+    from xtuner.v1.data_proto.messages import ChatMessages
+
+    query = VideoChat3TokenizeFunction.__new__(VideoChat3TokenizeFunction)
+    query.lact_chunk_query = True
+    query.lact_chunk_query_mode = "spatial_quarter"
+    query.macro_temporal_compression_factor = 1
+    query.macro_temporal_compression_mode = "mean"
+    query.video_processor = SimpleNamespace(temporal_merge_size=4, merge_size=2)
+    query.media_processor = SimpleNamespace(_calculate_timestamps=lambda meta, size: meta)
+    query._video_meta_list = [[1.5, 5.5, 8.0], [1.5]]
+    query.chat_template = SimpleNamespace(
+        image_start_token="<v>", image_end_token="</v>", video_context_token="V",
+    )
+    selected = copy.copy(query)
+    selected.lact_chunk_query = False
+    selected.lact_chunk_query_mode = "single"
+    selected.macro_temporal_compression_factor = 4
+    selected.macro_temporal_compression_mode = "chunk_select_last"
+    grids = [torch.tensor([9, 4, 8]), torch.tensor([4, 2, 2])]
+    messages = ChatMessages(messages=[{
+        "role": "user", "content": [{"type": "text", "text": "<VIDEO_CONTEXT> and <VIDEO_CONTEXT>"}],
+    }])
+    reference = copy.deepcopy(messages)
+    query._replace_video_token(reference, grids)
+    selected._replace_video_token(messages, grids)
+    assert messages.model_dump() == reference.model_dump()
+    for grid in grids:
+        assert selected._get_number_of_video_tokens(grid) == query._get_number_of_video_tokens(grid)
+
+
+@pytest.mark.parametrize("config_cls", [VideoChat3VisionConfig, VideoChat3LACTVisionConfig])
+def test_chunk_select_last_is_only_post_encoder_selection(config_cls):
+    kwargs = dict(
+        hidden_size=16, intermediate_size=32, num_attention_heads=4,
+        num_hidden_layers=2, patch_size=2, merge_kernel_size=[2, 2],
+        temporal_merge_size=4, init_pos_emb_height=4, init_pos_emb_width=8,
+        attn_impl="eager_attention",
+    )
+    if config_cls is VideoChat3LACTVisionConfig:
+        kwargs.update(memory_type="linear", inner_optim="delta", fw_num_heads=4,
+                      fw_order="parallel", lact_gate_init=0.1, clip_state_grad_ratio=False)
+    model = config_cls(**kwargs).build()
+    selected = copy.deepcopy(model)
+    selected.config.macro_temporal_compression_mode = "chunk_select_last"
+    selected.config.macro_temporal_compression_factor = 4
+    assert selected.chunk_query is None
+    assert model.state_dict().keys() == selected.state_dict().keys()
+    grids = torch.tensor([[9, 4, 8], [4, 2, 2]], dtype=torch.int32)
+    pixels = torch.randn(304, 12)
+    original = model(pixels, grids)
+    actual = selected(pixels, grids)
+    expected = [chunk[-max(1, chunk.shape[0] // 4):] for chunk in original]
+    for left, right in zip(actual, expected, strict=True):
+        torch.testing.assert_close(left, right, rtol=0, atol=0)
+    torch.cat(actual).square().mean().backward()
+    torch.cat(expected).square().mean().backward()
+    for (name, parameter), (_, reference) in zip(selected.named_parameters(), model.named_parameters(), strict=True):
+        assert "chunk_query" not in name
+        if reference.grad is not None:
+            torch.testing.assert_close(parameter.grad, reference.grad, rtol=0, atol=0)
 
 
 def test_video_last_token_and_timestamp_counts_ignore_macro_groups():

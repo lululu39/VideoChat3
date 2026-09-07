@@ -1,4 +1,4 @@
-"""Layout helpers for post-encoder macro temporal compression.
+"""Layout helpers for post-encoder temporal and spatial token selection.
 
 The inputs to these helpers are the per-clip outputs produced by VideoChat3's
 existing four-frame patch merger.  Macro compression is deliberately applied
@@ -19,6 +19,7 @@ SUPPORTED_MACRO_TEMPORAL_COMPRESSION_MODES = (
     "mean",
     "select_last",
     "video_last",
+    "chunk_select_last",
 )
 
 
@@ -44,7 +45,7 @@ def validate_macro_temporal_compression_mode(mode: str) -> str:
 def resolve_macro_temporal_compression_mode(
     mode: str,
     default: Literal["mean", "select_last"],
-) -> Literal["mean", "select_last", "video_last"]:
+) -> Literal["mean", "select_last", "video_last", "chunk_select_last"]:
     mode = validate_macro_temporal_compression_mode(mode)
     if mode == "auto":
         return default
@@ -80,6 +81,9 @@ def macro_clip_count(clip_count: int, factor: int, mode: str = "mean") -> int:
         mode = "mean"
     if clip_count <= 0:
         raise ValueError(f"clip_count must be positive, got {clip_count}")
+    if mode == "chunk_select_last":
+        validate_macro_temporal_compression_factor(factor)
+        return clip_count
     if mode == "video_last":
         validate_macro_temporal_compression_factor(factor)
         return 1
@@ -90,7 +94,7 @@ def compress_chunk_outputs(
     chunk_outputs: list[torch.Tensor],
     video_clip_counts: Sequence[int],
     factor: int,
-    mode: Literal["mean", "select_last", "video_last"],
+    mode: Literal["mean", "select_last", "video_last", "chunk_select_last"],
 ) -> list[torch.Tensor]:
     """Compress per-chunk tensors without allowing groups to cross videos.
 
@@ -99,9 +103,11 @@ def compress_chunk_outputs(
     ``select_last`` keeps the last complete-encoder output in every group.
     ``video_last`` keeps one final chunk output per video after all chunks have
     already traversed the encoder.
+    ``chunk_select_last`` keeps the last max(1, floor(S / factor)) merged
+    spatial tokens of every chunk, preserving every chunk and timestamp.
     """
     factor = validate_macro_temporal_compression_factor(factor)
-    if mode not in ("mean", "select_last", "video_last"):
+    if mode not in ("mean", "select_last", "video_last", "chunk_select_last"):
         raise ValueError(f"Unsupported macro temporal compression mode: {mode}")
     if sum(video_clip_counts) != len(chunk_outputs):
         raise ValueError(
@@ -112,6 +118,10 @@ def compress_chunk_outputs(
     # tensor objects, values, dtypes, and autograd graph exactly for normal R1.
     if factor == 1 and mode != "video_last":
         return chunk_outputs
+    if mode == "chunk_select_last":
+        if any(count <= 0 for count in video_clip_counts):
+            raise ValueError("video_clip_counts must be positive")
+        return [chunk[-max(1, chunk.shape[0] // factor):] for chunk in chunk_outputs]
 
     compressed: list[torch.Tensor] = []
     offset = 0
@@ -153,7 +163,7 @@ def compress_timestamps(
         mode = "mean"
     if mode == "video_last":
         return [float(timestamps[-1])]
-    if factor == 1:
+    if factor == 1 or mode == "chunk_select_last":
         return list(timestamps)
     if mode == "select_last":
         return [
@@ -182,6 +192,9 @@ def macro_video_token_count(
         )
     chunks = (time + temporal_merge_size - 1) // temporal_merge_size
     spatial_tokens = (height // spatial_merge_size) * (width // spatial_merge_size)
+    if mode == "chunk_select_last":
+        factor = validate_macro_temporal_compression_factor(factor)
+        spatial_tokens = max(1, spatial_tokens // factor)
     return macro_clip_count(chunks, factor, mode=mode) * spatial_tokens
 
 
