@@ -1076,7 +1076,7 @@ Stop result: last global CE `0.40861088`, pre-clip norm `0.24401857`; norms over
 
 ## v30 - Independent Same-Seed Reproduction of v26
 
-**Status:** Prepared for a fresh run after stopping v29; startup validation pending.
+**Status:** Stopped by the user after step 132/276 on 2026-09-07 after accepting the partial training reproduction. No final HF checkpoint or native evaluation; retain step-100 DCP for audit, do not resume.
 
 - Objective: reproduce v26's successful parallel learned-query joint adaptation in a separate run. This is a same-seed reproducibility check, not a different-seed robustness test.
 - Initialization: original `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, seed 42, attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state and linear gates, and the same 16-slot truncated-normal query initialization. Do not load v26's trained checkpoint.
@@ -1090,3 +1090,24 @@ Stop result: last global CE `0.40861088`, pre-clip norm `0.24401857`; norms over
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_R4QUERY_VITFWPROJ_train_timelens_v30.sh`.
 - Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v26repro-v30/<timestamp>/hf-276`.
 - Acceptance/reference: first-step CE must match v26 `0.75414109`; compare subsequent matched-step loss/gradients and final native TimeLens-Bench scores. v26's last-20 CE is `0.2606` and Charades/ActivityNet/QVHighlights mIoU is `36.98/37.55/48.75%`. Record checkpoint diagnostics and native R1@0.3/0.5/0.7 plus mIoU after completion; no teacher-forced evaluation.
+
+Partial reproduction result: first two CE values exactly match v26 (`0.75414109/0.71290547`), but after the first nonzero-LR update step-3 CE/norm is `0.75292253/13.17278` versus v26 `0.75519753/53.6162`; the trajectory is not bitwise identical. Steps 113-132 mean CE is `0.29440174` versus matched v26 `0.28312476`. Last CE/norm is `0.31177008/2.23174357`; norms over 132 steps have mean/median/max `9.18205/4.05591/75.85545`. The user accepted the similar training trend and switched to v31; this is not a completed native-performance or multi-seed replication.
+
+Artifacts: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v26repro-v30/20260907023152/checkpoints/ckpt-step-100`; native log `torchrun_logs/training_20260907_023129_datava270000004.log`. W&B is marked failed with a user-stop note; all eight GPUs were released.
+
+## v31 - Single Query per Chunk, Parallel ViT + FW + Projector
+
+**Status:** Prepared after stopping v30; fresh training startup pending.
+
+- Objective: repeat v23's one-query-per-four-frame-chunk experiment while unfreezing original ViT, testing whether the joint adaptation that helped v26 also improves this smaller output budget.
+- Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, seed 42, deterministic attention-share Linear16 private Q/K/V/O, zero recurrent state/linear gates, and one shared 1,152-element truncated-normal query (`std=0.02`). Do not reuse trained v23/v26/v30 weights.
+- Data: identical seed-42 12,624-row TimeLens random-half manifest over 8,985 videos; reuse v23's exact 6,593-pack single-query cache and order.
+- Trainable scope: `416,870,640` original ViT parameters, `143,888,256` LACT-added parameters including query/gates, and `33,039,616` projector parameters (`593,798,512` total). Only the 4B LM is frozen; unfreezing ViT is the sole model/optimization change from v23.
+- Memory/output: parallel Linear16+Delta group 1, fast-Q/K 3D RoPE, zero linear gate, apply-then-update, final update skipped. Each four-frame chunk contributes exactly one learned-query visual token with its timestamp. Queries participate in local attention and FW reads, use identity vision RoPE, and are excluded from FW writes.
+- Optimizer/LR schedule: identical v23 AdamW, uniform ViT/FW/query/gate/projector LR, 3% warmup and cosine `2e-5 -> 1e-6`, weight decay 0, one epoch, initial inner Delta write strength `0.01`, no gate-specific LR.
+- Stabilization: no NS5 or FW ratio clips; global gradient clip 1.0, full BPTT and ordinary activation checkpointing. CPU activation and parameter offload remain disabled.
+- Hardware/batch/sequence: 8xH100 ordinary FSDP, global batch 16, 1K sample/pack limits, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, 6,593 packs / 413 steps. `GPU_EXCLUSIVE=0`; no watchdog terminates unrelated jobs.
+- Training W&B: [`v31`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-chunkquery-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v31).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_CHUNKQUERY_VITFWPROJ_train_timelens_v31.sh`.
+- Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-gate0-chunkquery-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v31/<timestamp>/hf-413`.
+- Acceptance/reference: initial CE must match v23 `0.74471688`. Compare final native TimeLens-Bench R1@0.3/0.5/0.7 and mIoU against v23, whose mIoU is `12.51/8.48/6.60%` on Charades/ActivityNet/QVHighlights and last-20 CE is `0.3721`; use v26's 16-query results as a capacity reference. Record final checkpoint diagnostics and native scores when available; no teacher-forced evaluation.

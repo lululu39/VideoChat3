@@ -1,6 +1,6 @@
 # TimeLens Experiment Chart
 
-本表汇总所有使用 TimeLens-100K 训练的 canonical 编号实验 `v9-v30`，并加入未训练 Base R4 作为固定参考。除注明外，训练数据均为 seed-42 的 12,624-row random-half manifest，评测均为同一 TimeLens-Bench native generation/scoring 协议（2 FPS、最多 448 帧、224px/14,680,064 total pixels）。内部系统 smoke 合并在对应版本中，不单列为学习实验。
+本表汇总所有使用 TimeLens-100K 训练的 canonical 编号实验 `v9-v31`，并加入未训练 Base R4 作为固定参考。除注明外，训练数据均为 seed-42 的 12,624-row random-half manifest，评测均为同一 TimeLens-Bench native generation/scoring 协议（2 FPS、最多 448 帧、224px/14,680,064 total pixels）。内部系统 smoke 合并在对应版本中，不单列为学习实验。
 
 记号：`V` = 原始 ViT，`F` = LACT FW（含 gate；query 实验也含 query bank），`P` = projector；`GN` 是训练日志中的全局 pre-clip gradient norm，格式为 `mean / median / max`；CE 是最后 20 步均值（短暂停实验显示最后一步及 step）；分数均为百分数，`—` 表示没有对应 checkpoint 或没有执行 TimeLens-Bench。`Base R4 ref` 是未训练的 `/mnt/localssd/VideoChat3/VideoChat3-4B-R4-mean-init`，不是 v10 checkpoint。
 
@@ -28,7 +28,8 @@
 | v27 | Complete | V+P | 每 chunk `floor(S/4)` queries | 真 Base+query，无任何 FW/memory/gate；测试 ViT adaptation 单独是否足够 | `276/276`, 4K | `0.389` | `3.154 / 0.164 / 80.866` | — | `14.07` | `7.13` | `4.82` |
 | v28 | Complete | V+F+P | 每 chunk `floor(S/4)` queries | v26 的 bitwise-matched serial control；修复 loader 后 step-1 CE 精确匹配 v26 | `276/276`, 4K | `0.391` | `30.249 / 0.195 / 634.806` | `2.05e-4` | `15.37` | `6.96` | `6.15` |
 | v29 | Stopped, no ckpt | V+F+P | video-last | CPU offload 修复 OOM 后运行至 step 15；用户停止并转向 v26 复现，无原生评测 | `15/114`, 1K | `0.408611@15` | `1.783 / 2.277 / 3.236` | — | — | — | — |
-| v30 | Prepared | V+F+P | 每 chunk `floor(S/4)` queries | v26 同 seed 42、初始化、数据顺序和超参数的独立复现；关闭 CPU activation offload | `0/276`, 4K | — | — | init `0` | — | — | — |
+| v30 | Stopped; DCP only | V+F+P | 每 chunk `floor(S/4)` queries | v26 同 seed 复现至 step 132；末20步 CE `0.2944` vs 同区间 v26 `0.2831`，用户接受训练趋势后停止，无原生评测 | `132/276`, 4K | `0.311770@132` | `9.182 / 4.056 / 75.855` | — | — | — | — |
+| v31 | Prepared | V+F+P | 每 chunk 1 个 learned query | v23 唯一模型/优化变化为解冻 ViT，验证单 query 压缩的联合适配 | `0/413`, 1K | — | — | init `0` | — | — | — |
 
 ## 从表格可以归纳的规律
 
