@@ -1051,7 +1051,7 @@ Conclusion: serial topology destroys the successful v26 joint-adaptation result.
 
 ## v29 - Parallel Video-Last, Train ViT + FW + Projector
 
-**Status:** Clean launch prepared on 2026-09-07 after confirming all eight H100 GPUs are idle; restarting from initialization with the original v29 run ID. Startup validation pending.
+**Status:** Running from initialization on eight H100 GPUs since 2026-09-07; step 1/114 passed startup validation with exact v19 zero-gate CE parity. No final checkpoint or evaluation yet.
 
 - Objective: test the remaining interaction between successful v26-style parallel joint adaptation and the previously failed final-chunk-only output. Repeat v19 exactly while adding the original ViT to the trainable scope.
 - Initialization: identical to v19, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state/gates, and no chunk-query parameters.
@@ -1063,6 +1063,8 @@ Conclusion: serial topology destroys the successful v26 joint-adaptation result.
 - Hardware/batch/sequence: identical to v19, 8xH100 ordinary FSDP, global batch 16, 1K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, 1,815 packs, and 114 optimizer steps. Launch only after confirming the GPUs are idle; keep `GPU_EXCLUSIVE=0` so no watchdog terminates unrelated jobs. Because v19 already peaked near 77 GB, adding ViT gradients has a narrow memory margin and step 1 is the acceptance gate.
 - Training W&B: [`v29`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-lastchunk-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v29).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_LASTCHUNK_VITFWPROJ_train_timelens_v29.sh`.
-- Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-lastchunk-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v29/<timestamp>/hf-114`.
+- Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-gate0-lastchunk-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v29/20260907010616/hf-114`; the corresponding XTuner work directory is a symlink to this SSD run root.
 
-The first non-exclusive launch was stopped by the user before step 1 while all ranks were blocked on shared checkpoint I/O alongside three unrelated GPU jobs. It produced no training measurement, checkpoint, prediction, or reusable resume state; restart v29 from initialization when the GPUs are free.
+Startup validation: all GPUs were idle before launch, public W&B authenticated as `yibozhong657 (LVSM-Experiment)`, and the original v19 cache reproduces 1,815 packs / 114 steps. ViT/FW/projector are trainable with uniform LR and the LM is frozen. Step 1 CE `0.80019104` exactly matches v19, pre-clip norm is finite at `2.56830072`, and maximum rank allocated/reserved memory is `72.98/77.01 GB`; no OOM or training exception occurs. Rank-0 step-1 compute/data time is `286.78/49.82s`, with an initial remaining ETA near 9 hours; steady-state timing is pending. Historical decoder warnings recur, but first-step CE parity is preserved. Native log: `torchrun_logs/training_20260907_010503_datava270000004.log`; detached tmux session: `vc3-v29-20260907`.
+
+The earlier shared-GPU launch stopped before step 1 and produced no checkpoint or reusable resume state.
