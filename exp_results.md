@@ -1051,7 +1051,7 @@ Conclusion: serial topology destroys the successful v26 joint-adaptation result.
 
 ## v29 - Parallel Video-Last, Train ViT + FW + Projector
 
-**Status:** Queued for a clean rerun after the shared GPUs become free; no checkpoint or optimizer step exists.
+**Status:** Clean launch prepared on 2026-09-07 after confirming all eight H100 GPUs are idle; restarting from initialization with the original v29 run ID. Startup validation pending.
 
 - Objective: test the remaining interaction between successful v26-style parallel joint adaptation and the previously failed final-chunk-only output. Repeat v19 exactly while adding the original ViT to the trainable scope.
 - Initialization: identical to v19, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state/gates, and no chunk-query parameters.
@@ -1060,7 +1060,7 @@ Conclusion: serial topology destroys the successful v26 joint-adaptation result.
 - Memory/update/output: identical to v19, parallel Linear16+Delta group-1 continuous state, fast-Q/K 3D RoPE, zero-initialized linear gates, apply-then-update, final update skip, and `video_last` output retaining only the final chunk's spatial grid/timestamp for each video.
 - Optimizer/LR schedule: identical to v19 for all live groups, uniform ViT/FW/gate/projector AdamW with 3% warmup and cosine `2e-5 -> 1e-6`, weight decay 0, one epoch, inner Delta write strength `0.01`, and no gate-specific LR.
 - Stabilization: identical to v19, no FW ratio clip or NS5; XTuner global gradient clip 1.0 covers ViT, FW, and projector jointly.
-- Hardware/batch/sequence: identical to v19, 8xH100 ordinary FSDP, global batch 16, 1K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, 1,815 packs, and 114 optimizer steps. The run is launched with `GPU_EXCLUSIVE=0` to coexist with low-memory external jobs; no watchdog may terminate them. Because v19 already peaked near 77 GB, adding ViT gradients has a narrow memory margin and step 1 is the acceptance gate.
+- Hardware/batch/sequence: identical to v19, 8xH100 ordinary FSDP, global batch 16, 1K sample/pack length, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, 1,815 packs, and 114 optimizer steps. Launch only after confirming the GPUs are idle; keep `GPU_EXCLUSIVE=0` so no watchdog terminates unrelated jobs. Because v19 already peaked near 77 GB, adding ViT gradients has a narrow memory margin and step 1 is the acceptance gate.
 - Training W&B: [`v29`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-lastchunk-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v29).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_LASTCHUNK_VITFWPROJ_train_timelens_v29.sh`.
 - Expected artifact: `xtuner-videochat3/work_dir/stage3/vc3-lact-l16-delta-3drope-parallel-gate0-lastchunk-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v29/<timestamp>/hf-114`.
