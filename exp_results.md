@@ -1097,7 +1097,7 @@ Artifacts: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel
 
 ## v31 - Single Query per Chunk, Parallel ViT + FW + Projector
 
-**Status:** Prepared after stopping v30; fresh training startup pending.
+**Status:** Running on 2026-09-07 after stopping v30; startup validation passed through step 4/413. No final checkpoint or native evaluation yet.
 
 - Objective: repeat v23's one-query-per-four-frame-chunk experiment while unfreezing original ViT, testing whether the joint adaptation that helped v26 also improves this smaller output budget.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, seed 42, deterministic attention-share Linear16 private Q/K/V/O, zero recurrent state/linear gates, and one shared 1,152-element truncated-normal query (`std=0.02`). Do not reuse trained v23/v26/v30 weights.
@@ -1109,5 +1109,7 @@ Artifacts: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel
 - Hardware/batch/sequence: 8xH100 ordinary FSDP, global batch 16, 1K sample/pack limits, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, 6,593 packs / 413 steps. `GPU_EXCLUSIVE=0`; no watchdog terminates unrelated jobs.
 - Training W&B: [`v31`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-chunkquery-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v31).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_CHUNKQUERY_VITFWPROJ_train_timelens_v31.sh`.
-- Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-gate0-chunkquery-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v31/<timestamp>/hf-413`.
+- Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-gate0-chunkquery-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-v31/20260907035959/hf-413`.
 - Acceptance/reference: initial CE must match v23 `0.74471688`. Compare final native TimeLens-Bench R1@0.3/0.5/0.7 and mIoU against v23, whose mIoU is `12.51/8.48/6.60%` on Charades/ActivityNet/QVHighlights and last-20 CE is `0.3721`; use v26's 16-query results as a capacity reference. Record final checkpoint diagnostics and native scores when available; no teacher-forced evaluation.
+
+Startup validation: the exact v23 cache produces 6,593 packs / 413 steps; FSDP reports ViT/FW/projector trainable with LM frozen, single-query output, parallel Linear16+Delta and no CPU offload. Steps 1-4 global CE is `0.74471688/0.73712665/0.69713044/0.73155564`; the first two values exactly match v23, and pre-clip norms are finite at `3.441105/4.425344/4.090433/4.834459`. Steps 2-4 take `12.63/12.08/13.93s`; maximum rank allocated/reserved memory through step 4 is `16.27/17.62 GB`, with no OOM or training exception and an initial remaining ETA near 1.5 hours. Native log: `torchrun_logs/training_20260907_035942_datava270000004.log`; detached session: `vc3-v31-20260907`. Public W&B uses the existing `yibozhong657 (LVSM-Experiment)` login.

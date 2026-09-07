@@ -29,7 +29,7 @@
 | v28 | Complete | V+F+P | 每 chunk `floor(S/4)` queries | v26 的 bitwise-matched serial control；修复 loader 后 step-1 CE 精确匹配 v26 | `276/276`, 4K | `0.391` | `30.249 / 0.195 / 634.806` | `2.05e-4` | `15.37` | `6.96` | `6.15` |
 | v29 | Stopped, no ckpt | V+F+P | video-last | CPU offload 修复 OOM 后运行至 step 15；用户停止并转向 v26 复现，无原生评测 | `15/114`, 1K | `0.408611@15` | `1.783 / 2.277 / 3.236` | — | — | — | — |
 | v30 | Stopped; DCP only | V+F+P | 每 chunk `floor(S/4)` queries | v26 同 seed 复现至 step 132；末20步 CE `0.2944` vs 同区间 v26 `0.2831`，用户接受训练趋势后停止，无原生评测 | `132/276`, 4K | `0.311770@132` | `9.182 / 4.056 / 75.855` | — | — | — | — |
-| v31 | Prepared | V+F+P | 每 chunk 1 个 learned query | v23 唯一模型/优化变化为解冻 ViT，验证单 query 压缩的联合适配 | `0/413`, 1K | — | — | init `0` | — | — | — |
+| v31 | Running | V+F+P | 每 chunk 1 个 learned query | v23 唯一模型/优化变化为解冻 ViT；前两步 CE 精确复现，启动约12–14s/step，峰值 allocated/reserved `16.27/17.62GB` | `4/413`（启动记录）, 1K | `0.731556@4` | `4.198 / 4.258 / 4.834`（steps 1-4） | init `0` | — | — | — |
 
 ## 从表格可以归纳的规律
 
