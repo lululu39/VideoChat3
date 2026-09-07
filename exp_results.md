@@ -1097,7 +1097,7 @@ Artifacts: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel
 
 ## v31 - Single Query per Chunk, Parallel ViT + FW + Projector
 
-**Status:** Running on 2026-09-07 after stopping v30; startup validation passed through step 4/413. No final checkpoint or native evaluation yet.
+**Status:** Stopped by the user after step 164/413 on 2026-09-07 to launch v32. No final HF checkpoint or native evaluation; retain step-100 DCP for audit and do not resume.
 
 - Objective: repeat v23's one-query-per-four-frame-chunk experiment while unfreezing original ViT, testing whether the joint adaptation that helped v26 also improves this smaller output budget.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, seed 42, deterministic attention-share Linear16 private Q/K/V/O, zero recurrent state/linear gates, and one shared 1,152-element truncated-normal query (`std=0.02`). Do not reuse trained v23/v26/v30 weights.
@@ -1114,9 +1114,11 @@ Artifacts: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel
 
 Startup validation: the exact v23 cache produces 6,593 packs / 413 steps; FSDP reports ViT/FW/projector trainable with LM frozen, single-query output, parallel Linear16+Delta and no CPU offload. Steps 1-4 global CE is `0.74471688/0.73712665/0.69713044/0.73155564`; the first two values exactly match v23, and pre-clip norms are finite at `3.441105/4.425344/4.090433/4.834459`. Steps 2-4 take `12.63/12.08/13.93s`; maximum rank allocated/reserved memory through step 4 is `16.27/17.62 GB`, with no OOM or training exception and an initial remaining ETA near 1.5 hours. Native log: `torchrun_logs/training_20260907_035942_datava270000004.log`; detached session: `vc3-v31-20260907`. Public W&B uses the existing `yibozhong657 (LVSM-Experiment)` login.
 
+Stop result: last global CE/pre-clip norm `0.33500308/2.35337234`, last-20 mean CE `0.30592447`, and grad-norm mean/median/max over 164 steps `1.704520/1.64836/5.592647`. The gradient recovery and lower CE support improved training fit versus v23, but no native performance claim is established. W&B is marked failed with the user-stop reason. Retained DCP: run root `20260907035959/checkpoints/ckpt-step-100`; no HF export exists. All eight training processes exited and GPUs were released.
+
 ## v32 - Per-Chunk Original-Token Selection at v26's Query Budget
 
-**Status:** Configured and pending launch; v31 remains active. No training or evaluation result yet.
+**Status:** Launch prepared on 2026-09-07 after stopping v31 at the user's request. Starting from initialization; cache and runtime validation pending.
 
 - Objective: distinguish v26's learned-query interface from retaining the same number of original spatial tokens at every chunk with identical timestamps. Replace its queries with the last `max(1,floor(S/4))` post-merger spatial tokens per four-frame chunk.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, seed 42, Linear16 attention-share private projections, zero state/gates; no query parameters or query insertion. This removes query participation in local attention as well as query readout. Common source/seed does not guarantee bitwise-identical random FW beta initialization across constructors with/without query parameters.
@@ -1125,8 +1127,8 @@ Startup validation: the exact v23 cache produces 6,593 packs / 413 steps; FSDP r
 - Memory/output: v26 parallel Linear16+Delta group 1, fast-Q/K 3D RoPE, zero linear gate, full apply-then-update recurrence, final update skipped. Selectable `macro_temporal_compression_mode="chunk_select_last"`, factor 4, queries disabled. At 224px this selects the last 16 of 64 original merged spatial tokens from every chunk, retaining each timestamp. Short tails and non-divisible spatial grids use v26's floor/minimum-one token-count rule.
 - Optimizer/LR schedule: v26 uniform ViT/FW/projector AdamW, 3% warmup and cosine `2e-5 -> 1e-6`, weight decay 0, one epoch, initial inner Delta strength `0.01`; no gate-specific LR.
 - Stabilization: no NS5 or FW ratio clips, global gradient clip 1.0, full BPTT with ordinary FSDP activation checkpointing; CPU offload disabled.
-- Hardware/batch/sequence: 8xH100, global batch 16, 4K sample/pack limits, 2 FPS, 64-448 frames, total-pixel budget 14,680,064. Do not stop v31 or run a GPU-killing watchdog for this experiment.
-- Training W&B (planned): [`v32`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-chunktailr4-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v32).
+- Hardware/batch/sequence: 8xH100, global batch 16, 4K sample/pack limits, 2 FPS, 64-448 frames, total-pixel budget 14,680,064. Launch after v31 exits and GPUs are idle; `GPU_EXCLUSIVE=0` disables the GPU-killing watchdog.
+- Training W&B: [`v32`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-chunktailr4-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v32).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_CHUNKTAILR4_VITFWPROJ_train_timelens_v32.sh`.
 - Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-gate0-chunktailr4-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v32/<timestamp>/hf-276`.
 - Evaluation: native TimeLens-Bench R1@0.3/0.5/0.7 and mIoU versus v26 (`36.98/37.55/48.75%` mIoU). Initial CE need not equal v26 because the output representation changes. Matching final quality would show learned queries are not necessary for that quality under dense temporal coverage; a gap would support a benefit from the query interface, subject to the initialization caveat. Record checkpoint diagnostics and actual native scores after completion.
