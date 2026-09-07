@@ -42,7 +42,7 @@ from torch.distributed.fsdp import (
 )
 from xtuner.v1.ops.attn_imp import attn_impl_mapping
 from xtuner.v1.model.utils.checkpointing import checkpoint_wrapper
-from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import CheckpointImpl
+from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import CheckpointImpl, offload_wrapper
 from xtuner.v1.module import RMSNorm
 from xtuner.v1.ops.others import Dropout
 from xtuner.v1.ops.act_fn import get_act_fn
@@ -886,6 +886,13 @@ class VideoChat3VisionModel(BaseModel):
 
         recompute_ratio = fsdp_config.vision_recompute_ratio
         num_recompute_layers = int(len(self.encoder.blocks) * recompute_ratio)
+        if fsdp_config.vision_activation_offload:
+            if (
+                num_recompute_layers != len(self.encoder.blocks)
+                or getattr(self.config, "fw_update_layer_group_size", 1) != 1
+            ):
+                raise ValueError("Vision activation offload requires full layer-major checkpointing")
+            logger.info("Offload checkpointed vision-block inputs to CPU")
         checkpoint_impl = (
             CheckpointImpl.NO_REENTRANT
             if any(not parameter.requires_grad for parameter in self.parameters())
@@ -906,6 +913,10 @@ class VideoChat3VisionModel(BaseModel):
                 layer = checkpoint_wrapper(layer, 
                                         preserve_rng_state=checkpoint_preserve_rng_state,
                                         checkpoint_impl=checkpoint_impl)
+                if fsdp_config.vision_activation_offload:
+                    # Wrap outside checkpointing: only saved block inputs move
+                    # to CPU, while recomputation and all gradients stay exact.
+                    layer = offload_wrapper(layer)
 
             self.encoder.blocks[layer_idx] = layer
 

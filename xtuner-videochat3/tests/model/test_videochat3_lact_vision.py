@@ -2,7 +2,12 @@ import copy
 
 import torch
 import torch.nn.functional as F
+from torch.distributed.algorithms._checkpoint.checkpoint_wrapper import (
+    CheckpointImpl,
+    offload_wrapper,
+)
 from torch.utils.checkpoint import checkpoint
+from xtuner.v1.model.utils.checkpointing import checkpoint_wrapper
 
 from xtuner.v1.model.compose.videochat3.modeling_vision_lact import (
     FastWeightSwiGLU,
@@ -38,6 +43,58 @@ def _vision_kwargs():
 
 def _flatten_outputs(outputs):
     return torch.cat([output.flatten() for output in outputs])
+
+
+def test_linear_vision_checkpoint_offload_preserves_forward_gradients_and_state_keys():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    for frozen_vit in (False, True):
+        torch.manual_seed(42)
+        model = VideoChat3LACTVisionConfig(
+            **_vision_kwargs(),
+            memory_type="linear",
+            inner_optim="delta",
+            fw_num_heads=4,
+            fw_order="parallel",
+            lact_3d_rope=True,
+            lact_gate_init=0.2,
+            clip_state_grad_ratio=False,
+            macro_temporal_compression_mode="video_last",
+        ).build().to(device=device, dtype=dtype)
+        if frozen_vit:
+            for name, parameter in model.named_parameters():
+                parameter.requires_grad_(model._is_lact_state_key(name))
+        offloaded = copy.deepcopy(model)
+        impl = CheckpointImpl.NO_REENTRANT if frozen_vit else CheckpointImpl.REENTRANT
+        for index in range(len(model.encoder.blocks)):
+            model.encoder.blocks[index] = checkpoint_wrapper(
+                model.encoder.blocks[index], checkpoint_impl=impl,
+            )
+            offloaded.encoder.blocks[index] = offload_wrapper(checkpoint_wrapper(
+                offloaded.encoder.blocks[index], checkpoint_impl=impl,
+            ))
+        pixels = torch.randn(80, 12, device=device, dtype=dtype)
+        grids = torch.tensor([[12, 2, 2], [8, 2, 2]], device=device, dtype=torch.int32)
+        reference = _flatten_outputs(model(pixels, grids))
+        actual = _flatten_outputs(offloaded(pixels, grids))
+        torch.testing.assert_close(actual, reference, rtol=0, atol=0)
+        cotangent = torch.randn_like(reference)
+        reference.backward(cotangent)
+        actual.backward(cotangent)
+        reference_parameters = {
+            name.replace("_checkpoint_wrapped_module.", ""): parameter
+            for name, parameter in model.named_parameters()
+        }
+        for name, parameter in offloaded.named_parameters():
+            expected = reference_parameters[name.replace("_checkpoint_wrapped_module.", "")]
+            if expected.grad is None:
+                assert parameter.grad is None
+            else:
+                torch.testing.assert_close(parameter.grad, expected.grad, rtol=0, atol=0)
+        gate_grad = reference_parameters["encoder.blocks.0.memory_gate"].grad
+        assert gate_grad is not None and torch.count_nonzero(gate_grad) > 0
+        assert model.state_dict().keys() == offloaded.state_dict().keys()
+        model.load_state_dict(offloaded.state_dict(), strict=True)
 
 
 def _copy_baseline_weights(baseline, lact):

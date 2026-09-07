@@ -225,6 +225,7 @@ lr_cfg = LRConfig(
 fsdp_cfg = FSDPConfig(
     sp_size=1,
     recompute_ratio=recompute_ratio,
+    vision_activation_offload=env_bool("VIDEOCHAT3_VISION_ACTIVATION_OFFLOAD"),
     torch_compile=False,
 )
 
