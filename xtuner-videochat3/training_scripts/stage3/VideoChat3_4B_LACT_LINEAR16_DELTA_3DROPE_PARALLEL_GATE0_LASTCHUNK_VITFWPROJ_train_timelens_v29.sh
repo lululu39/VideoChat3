@@ -3,7 +3,7 @@
 set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 
-export WANDB_NAME="vc3-lact-l16-delta-3drope-parallel-gate0-lastchunk-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-actoffload-v29"
+export WANDB_NAME="vc3-lact-l16-delta-3drope-parallel-gate0-lastchunk-vitfwproj-timelens-r12624-8xh100-gb16-f448-s1k-lr2e5-actoffload-clean-v29"
 export WANDB_RUN_ID="${WANDB_NAME}"
 export VIDEOCHAT3_MODEL_VARIANT="lact"
 export VIDEOCHAT3_MACRO_TEMPORAL_COMPRESSION_FACTOR=4

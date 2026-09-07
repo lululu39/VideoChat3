@@ -45,6 +45,40 @@ def _flatten_outputs(outputs):
     return torch.cat([output.flatten() for output in outputs])
 
 
+def test_nested_checkpoint_offload_preserves_hf_parameter_loading():
+    torch.manual_seed(43)
+    source = VideoChat3LACTVisionConfig(
+        **_vision_kwargs(), memory_type="linear", inner_optim="delta", fw_num_heads=4,
+    ).build()
+    expected = {name: value.clone() for name, value in source.state_dict().items()}
+    hf_tensors = {
+        source.to_hf_key_list(name)[0]: value for name, value in expected.items()
+    }
+
+    class MemoryCheckpointLoader:
+        weight_map = dict.fromkeys(hf_tensors, "test.safetensors")
+
+        def is_key_exist(self, key):
+            return key in hf_tensors
+
+        def load(self, key):
+            return hf_tensors.get(key)
+
+    target = copy.deepcopy(source)
+    for index, block in enumerate(target.encoder.blocks):
+        target.encoder.blocks[index] = offload_wrapper(checkpoint_wrapper(block))
+    with torch.no_grad():
+        for parameter in target.parameters():
+            parameter.zero_()
+    loaded, unloaded, missing = target._load_params(MemoryCheckpointLoader(), strict=True)
+    assert loaded == set(expected)
+    assert not unloaded and not missing
+    for name, value in target.state_dict().items():
+        torch.testing.assert_close(value, expected[name], rtol=0, atol=0)
+    nested_name = "encoder._orig_mod.blocks.0._checkpoint_wrapped_module._checkpoint_wrapped_module.wqkv.weight"
+    assert target._clean_param_name(nested_name) == "encoder.blocks.0.wqkv.weight"
+
+
 def test_linear_vision_checkpoint_offload_preserves_forward_gradients_and_state_keys():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.bfloat16 if device == "cuda" else torch.float32

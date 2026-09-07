@@ -684,11 +684,12 @@ class BaseModel(nn.Module):
             yield name_list, gathered_tensor_list
 
     def _clean_param_name(self, name: str) -> str:
-        if "._checkpoint_wrapped_module." in name:
-            name = name.replace("._checkpoint_wrapped_module.", ".")
-        if "._orig_mod." in name:
-            name = name.replace("._orig_mod.", ".")
-        return name
+        # Adjacent wrappers share a dot, so one str.replace pass can leave
+        # behind a wrapper component and silently skip its HF parameters.
+        return ".".join(
+            component for component in name.split(".")
+            if component not in {"_checkpoint_wrapped_module", "_orig_mod"}
+        )
 
     def _group_param_by_load_spec(self, load_enum: LoadEnum):
         """Group the parameters by load spec."""
