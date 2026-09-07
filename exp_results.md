@@ -1141,7 +1141,7 @@ Stop result: last CE/pre-clip norm `0.26332021/5.27989531`; last-20 mean CE `0.3
 
 ## v33 - Uniform Per-Chunk Original-Token Selection
 
-**Status:** Prepared for launch on 2026-09-07 after stopping v32 at the user's request; runtime validation pending.
+**Status:** Running from initialization on 2026-09-07 after stopping v32 at the user's request. Cache parity and startup validation passed through step 3/276; no final checkpoint or native evaluation yet.
 
 - Objective: isolate spatial selection positions by repeating v32 with deterministic uniform sampling instead of each chunk's spatial tail, at the same token/timestamp budget as v26.
 - Initialization: identical v32 source `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, seed 42, no query parameters, attention-share Linear16 private projections and zero state/gates. The model constructor and training scope are unchanged; only post-merger selection indices differ.
@@ -1153,7 +1153,9 @@ Stop result: last CE/pre-clip norm `0.26332021/5.27989531`; last-20 mean CE `0.3
 - Hardware/batch/sequence: 8xH100, global batch 16, 4K sample/pack limits, 2 FPS, 64-448 frames, total-pixel budget 14,680,064. `GPU_EXCLUSIVE=0`; no watchdog terminates unrelated jobs.
 - Training W&B: [`v33`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-chunkuniformr4-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v33).
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_CHUNKUNIFORMR4_VITFWPROJ_train_timelens_v33.sh`.
-- Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-gate0-chunkuniformr4-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v33/<timestamp>/hf-276`.
+- Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-gate0-chunkuniformr4-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v33/20260907045648/hf-276`.
 - Evaluation: native TimeLens-Bench R1@0.3/0.5/0.7 and mIoU versus v26 (`36.98/37.55/48.75%` mIoU), plus matched-step training comparisons with the stopped v32. No native v32 checkpoint exists. Inspect final gates, FW and original-model parameter deltas after completion; no teacher-forced evaluation.
 
 Implementation validation: 52 vision/layout/HF-export tests pass, covering both selection modes, deterministic indices and gradients, all supported factors, short tails, query-budget placeholder/timestamp parity, and Base/LACT HF model/processor round trips. The v33 launcher differs from v32 only in run/cache identity and `chunk_select_last -> chunk_select_uniform`.
+
+Startup validation: uniform-mode `num_tokens.npy` is bitwise identical to both v32 and v26 caches for all 12,624 rows (16,669,984 total estimated tokens, maximum 2,297), reproducing 4,401 packs / 276 steps. ViT/FW/projector are trainable, LM frozen and queries disabled. Steps 1-3 global CE is `0.55709684/0.55141866/0.59137642`, with finite pre-clip norms `15.213007/13.768787/17.070650`. Steps 2-3 take `37.09/35.34s`, maximum rank allocated/reserved memory is `28.18/30.64 GB`, and there is no OOM or placeholder mismatch. Initial remaining ETA is about 3 hours. Native log: `torchrun_logs/training_20260907_045630_datava270000004.log`; detached session: `vc3-v33-20260907`. Public W&B uses the existing `yibozhong657 (LVSM-Experiment)` login.

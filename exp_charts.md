@@ -31,7 +31,7 @@
 | v30 | Stopped; DCP only | V+F+P | 每 chunk `floor(S/4)` queries | v26 同 seed 复现至 step 132；末20步 CE `0.2944` vs 同区间 v26 `0.2831`，用户接受训练趋势后停止，无原生评测 | `132/276`, 4K | `0.311770@132` | `9.182 / 4.056 / 75.855` | — | — | — | — |
 | v31 | Stopped; DCP only | V+F+P | 每 chunk 1 个 learned query | 用户在 step 164 停止并转向 v32；末20步 CE `0.3059`，保留 step-100 DCP，无原生评测 | `164/413`, 1K | `0.335003@164` | `1.705 / 1.648 / 5.593` | — | — | — | — |
 | v32 | Stopped, no ckpt | V+F+P | 每 chunk 末尾 `floor(S/4)` 个原始空间 token | 用户在 step 22 停止并转向均匀选择 v33；无原生评测 | `22/276`, 4K | `0.263320@22` | `12.433 / 10.115 / 33.478` | — | — | — | — |
-| v33 | Prepared | V+F+P | 每 chunk 均匀选 `floor(S/4)` 个原始空间 token | v32 只改变空间选择索引；数量、timestamps、parallel 联合训练配方保持一致 | `0/276`（预计）, 4K | — | — | init `0` | — | — | — |
+| v33 | Running | V+F+P | 每 chunk 均匀选 `floor(S/4)` 个原始空间 token | 与 v32/v26 逐样本 token 数一致；启动约35–37s/step，峰值 allocated/reserved `28.18/30.64GB` | `3/276`（启动记录）, 4K | `0.591376@3` | `15.351 / 15.213 / 17.071`（steps 1-3） | init `0` | — | — | — |
 
 ## 从表格可以归纳的规律
 
