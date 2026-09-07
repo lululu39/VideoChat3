@@ -171,15 +171,16 @@ def _write_tiny_base_config(path: Path, model_config) -> None:
 
 
 @pytest.mark.parametrize("variant", ["lact", "macro"])
+@pytest.mark.parametrize("mode", ["chunk_select_last", "chunk_select_uniform"])
 @pytest.mark.skipif(not (OFFICIAL_CHECKPOINT / "modeling_videochat3.py").is_file(),
                     reason="Official VideoChat3 remote code is not available")
-def test_chunk_select_last_hf_roundtrip_and_processor_layout(tmp_path, monkeypatch, variant):
+def test_chunk_selection_hf_roundtrip_and_processor_layout(tmp_path, monkeypatch, variant, mode):
     config = _tiny_model_config() if variant == "lact" else _tiny_base_query_model_config()
     query_flag = "lact_chunk_query" if variant == "lact" else "chunk_query"
     updates = {
         query_flag: False, f"{query_flag}_mode": "single",
         "macro_temporal_compression_factor": 4,
-        "macro_temporal_compression_mode": "chunk_select_last",
+        "macro_temporal_compression_mode": mode,
         "init_pos_emb_height": 4, "init_pos_emb_width": 8,
     }
     if variant == "lact":
@@ -199,11 +200,11 @@ def test_chunk_select_last_hf_roundtrip_and_processor_layout(tmp_path, monkeypat
                 tensor.copy_(tensor.to(torch.bfloat16).float())
     model.save_hf(save_path, save_dtype=torch.bfloat16)
     saved = AutoConfig.from_pretrained(save_path, trust_remote_code=True)
-    assert saved.vision_config.macro_temporal_compression_mode == "chunk_select_last"
+    assert saved.vision_config.macro_temporal_compression_mode == mode
     assert saved.vision_config.macro_temporal_compression_factor == 4
     assert not getattr(saved.vision_config, query_flag)
     processor_config = json.loads((save_path / "processor_config.json").read_text())
-    assert processor_config["macro_temporal_compression_mode"] == "chunk_select_last"
+    assert processor_config["macro_temporal_compression_mode"] == mode
     assert processor_config["macro_temporal_compression_factor"] == 4
     hf_model, info = AutoModelForCausalLM.from_pretrained(
         save_path, trust_remote_code=True, dtype=torch.float32, output_loading_info=True,
@@ -224,7 +225,7 @@ def test_chunk_select_last_hf_roundtrip_and_processor_layout(tmp_path, monkeypat
     class_name = "VideoChat3LACTProcessor" if variant == "lact" else "VideoChat3MacroProcessor"
     processor_cls = get_class_from_dynamic_module(f"processing_videochat3_{variant}.{class_name}", save_path)
     processor = processor_cls.__new__(processor_cls)
-    processor.macro_temporal_compression_mode = "chunk_select_last"
+    processor.macro_temporal_compression_mode = mode
     processor.macro_temporal_compression_factor = 4
     setattr(processor, query_flag, False)
     setattr(processor, f"{query_flag}_mode", "single")
@@ -239,7 +240,12 @@ def test_chunk_select_last_hf_roundtrip_and_processor_layout(tmp_path, monkeypat
     monkeypatch.setattr(processor_cls.__mro__[1], "__call__", parent_call)
     result = processor()
     assert result["input_ids"].tolist() == [[7, 101, 101, 8, 101, 9, 100, 100, 10]]
-    assert result["position_trace"].tolist() == [[0, 7, 8, 9, 15, 16, 23, 24, 25]]
+    expected_positions = (
+        [0, 7, 8, 9, 15, 16, 23, 24, 25]
+        if mode == "chunk_select_last"
+        else [0, 1, 8, 9, 13, 16, 17, 24, 25]
+    )
+    assert result["position_trace"].tolist() == [expected_positions]
     assert result["attention_mask"].shape == result["input_ids"].shape
     assert result["pixel_values"] is pixels
 

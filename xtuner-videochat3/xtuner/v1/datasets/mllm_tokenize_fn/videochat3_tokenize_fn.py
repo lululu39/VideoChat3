@@ -563,7 +563,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
                                         else video_grid_thw[current_video_idx][1:].prod()
                                         // merge_length
                                     )
-                                    if self.macro_temporal_compression_mode == "chunk_select_last":
+                                    if self.macro_temporal_compression_mode in ("chunk_select_last", "chunk_select_uniform"):
                                         frame_seqlen = max(
                                             1, int(frame_seqlen) // self.macro_temporal_compression_factor
                                         )
@@ -667,7 +667,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             media_grid_thw.append(smart_get_image_thw(size, self.image_processor))
         media_grid_thw = torch.tensor(media_grid_thw, dtype=torch.int).reshape(-1, 3)  # type: ignore
         sum_media_grid_thw = media_grid_thw.prod(dim=1) // self.spatial_merge_length  # type: ignore
-        if self.macro_temporal_compression_mode == "chunk_select_last":
+        if self.macro_temporal_compression_mode in ("chunk_select_last", "chunk_select_uniform"):
             sum_media_grid_thw = (
                 sum_media_grid_thw // self.macro_temporal_compression_factor
             ).clamp_min(1)
@@ -700,7 +700,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
             grid_thw_merged = [grid_thw_merged]
             grid_thw = [grid_thw]
         grid_thw_merged = [merged_thw.prod() // self.spatial_merge_length for merged_thw in grid_thw_merged]  # type: ignore
-        if self.macro_temporal_compression_mode == "chunk_select_last":
+        if self.macro_temporal_compression_mode in ("chunk_select_last", "chunk_select_uniform"):
             grid_thw_merged = [
                 (count // self.macro_temporal_compression_factor).clamp_min(1)
                 for count in grid_thw_merged
@@ -865,6 +865,7 @@ class VideoChat3TokenizeFnConfig(BaseMLLMTokenizeFnConfig):
         "select_last",
         "video_last",
         "chunk_select_last",
+        "chunk_select_uniform",
     ] = "auto"
     lact_chunk_query: bool = False
     lact_chunk_query_mode: Literal["single", "spatial_quarter"] = "single"

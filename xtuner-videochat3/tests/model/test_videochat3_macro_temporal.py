@@ -62,18 +62,40 @@ def test_chunk_select_last_keeps_spatial_tails_and_their_gradients():
     assert macro_clip_count(5, 4, mode="chunk_select_last") == 5
 
 
+def test_chunk_select_uniform_indices_and_gradients():
+    chunks = [torch.randn(size, 4, 2, requires_grad=True) for size in (64, 6, 1)]
+    outputs = compress_chunk_outputs(chunks, [2, 1], 4, mode="chunk_select_uniform")
+    indices = [
+        torch.tensor([0, 4, 8, 12, 16, 21, 25, 29, 33, 37, 42, 46, 50, 54, 58, 63]),
+        torch.tensor([3]), torch.tensor([0]),
+    ]
+    for chunk, output, selected in zip(chunks, outputs, indices, strict=True):
+        torch.testing.assert_close(output, chunk[selected], rtol=0, atol=0)
+    sum(output.sum() for output in outputs).backward()
+    for chunk, selected in zip(chunks, indices, strict=True):
+        expected = torch.zeros_like(chunk)
+        expected[selected] = 1
+        torch.testing.assert_close(chunk.grad, expected, rtol=0, atol=0)
+    assert compress_chunk_outputs(chunks, [2, 1], 1, mode="chunk_select_uniform") is chunks
+    stamps = [0.5, 1.5, 2.5]
+    assert compress_timestamps(stamps, 4, mode="chunk_select_uniform") == stamps
+    assert macro_clip_count(3, 4, mode="chunk_select_uniform") == 3
+
+
+@pytest.mark.parametrize("mode", ["chunk_select_last", "chunk_select_uniform"])
 @pytest.mark.parametrize("factor", [1, 2, 4, 8])
-def test_chunk_select_last_counts_all_chunks_including_short_tails(factor):
+def test_chunk_selection_counts_all_chunks_including_short_tails(factor, mode):
     for frames in (1, 4, 9, 64, 224, 448):
         for height, width in ((2, 2), (4, 6), (6, 6), (12, 16), (16, 16)):
             actual = macro_video_token_count(
                 (frames, height, width), temporal_merge_size=4,
-                spatial_merge_size=2, factor=factor, mode="chunk_select_last",
+                spatial_merge_size=2, factor=factor, mode=mode,
             )
             assert actual == ((frames + 3) // 4) * max(1, (height * width // 4) // factor)
 
 
-def test_chunk_select_last_matches_query_placeholder_layout():
+@pytest.mark.parametrize("mode", ["chunk_select_last", "chunk_select_uniform"])
+def test_chunk_selection_matches_query_placeholder_layout(mode):
     from xtuner.v1.data_proto.messages import ChatMessages
 
     query = VideoChat3TokenizeFunction.__new__(VideoChat3TokenizeFunction)
@@ -91,7 +113,7 @@ def test_chunk_select_last_matches_query_placeholder_layout():
     selected.lact_chunk_query = False
     selected.lact_chunk_query_mode = "single"
     selected.macro_temporal_compression_factor = 4
-    selected.macro_temporal_compression_mode = "chunk_select_last"
+    selected.macro_temporal_compression_mode = mode
     grids = [torch.tensor([9, 4, 8]), torch.tensor([4, 2, 2])]
     messages = ChatMessages(messages=[{
         "role": "user", "content": [{"type": "text", "text": "<VIDEO_CONTEXT> and <VIDEO_CONTEXT>"}],
@@ -105,7 +127,8 @@ def test_chunk_select_last_matches_query_placeholder_layout():
 
 
 @pytest.mark.parametrize("config_cls", [VideoChat3VisionConfig, VideoChat3LACTVisionConfig])
-def test_chunk_select_last_is_only_post_encoder_selection(config_cls):
+@pytest.mark.parametrize("mode", ["chunk_select_last", "chunk_select_uniform"])
+def test_chunk_selection_is_only_post_encoder_selection(config_cls, mode):
     kwargs = dict(
         hidden_size=16, intermediate_size=32, num_attention_heads=4,
         num_hidden_layers=2, patch_size=2, merge_kernel_size=[2, 2],
@@ -117,7 +140,7 @@ def test_chunk_select_last_is_only_post_encoder_selection(config_cls):
                       fw_order="parallel", lact_gate_init=0.1, clip_state_grad_ratio=False)
     model = config_cls(**kwargs).build()
     selected = copy.deepcopy(model)
-    selected.config.macro_temporal_compression_mode = "chunk_select_last"
+    selected.config.macro_temporal_compression_mode = mode
     selected.config.macro_temporal_compression_factor = 4
     assert selected.chunk_query is None
     assert model.state_dict().keys() == selected.state_dict().keys()
@@ -125,7 +148,11 @@ def test_chunk_select_last_is_only_post_encoder_selection(config_cls):
     pixels = torch.randn(304, 12)
     original = model(pixels, grids)
     actual = selected(pixels, grids)
-    expected = [chunk[-max(1, chunk.shape[0] // 4):] for chunk in original]
+    expected = (
+        [chunk[-max(1, chunk.shape[0] // 4):] for chunk in original]
+        if mode == "chunk_select_last"
+        else [chunk[[0, 7]] if chunk.shape[0] == 8 else chunk[[0]] for chunk in original]
+    )
     for left, right in zip(actual, expected, strict=True):
         torch.testing.assert_close(left, right, rtol=0, atol=0)
     torch.cat(actual).square().mean().backward()

@@ -32,10 +32,11 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
             "select_last",
             "video_last",
             "chunk_select_last",
+            "chunk_select_uniform",
         ):
             raise ValueError(
                 "macro_temporal_compression_mode must be one of "
-                "('auto', 'mean', 'select_last', 'video_last', 'chunk_select_last'), got "
+                "('auto', 'mean', 'select_last', 'video_last', 'chunk_select_last', 'chunk_select_uniform'), got "
                 f"{macro_temporal_compression_mode!r}"
             )
         self.macro_temporal_compression_factor = macro_temporal_compression_factor
@@ -77,7 +78,7 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
             mode = "mean"
         if mode == "video_last":
             return [timestamps[-1]]
-        if factor == 1 or mode == "chunk_select_last":
+        if factor == 1 or mode in ("chunk_select_last", "chunk_select_uniform"):
             return timestamps
         if mode == "select_last":
             return [
@@ -92,7 +93,7 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
 
     def __call__(self, *args: Any, **kwargs: Any):
         outputs = super().__call__(*args, **kwargs)
-        select_spatial = self.macro_temporal_compression_mode == "chunk_select_last"
+        select_spatial = self.macro_temporal_compression_mode in ("chunk_select_last", "chunk_select_uniform")
         if (not self.lact_chunk_query and not select_spatial) or "input_ids" not in outputs:
             return outputs
 
@@ -154,7 +155,7 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
         keep = torch.ones(row.shape[0], device=row.device, dtype=torch.bool)
         index = 0
         while index < row.shape[0]:
-            select_spatial = self.macro_temporal_compression_mode == "chunk_select_last"
+            select_spatial = self.macro_temporal_compression_mode in ("chunk_select_last", "chunk_select_uniform")
             token_ids = {self.video_token_id}
             if select_spatial:
                 token_ids.add(self.image_token_id)
@@ -168,7 +169,16 @@ class VideoChat3LACTProcessor(VideoChat3Processor):
             run_length = end - index
             if select_spatial:
                 keep_count = max(1, run_length // self.macro_temporal_compression_factor)
-                keep[index : end - keep_count] = False
+                if self.macro_temporal_compression_mode == "chunk_select_uniform":
+                    offsets = (
+                        torch.arange(keep_count, device=row.device) * (run_length - 1) // (keep_count - 1)
+                        if keep_count > 1
+                        else torch.tensor([run_length // 2], device=row.device)
+                    )
+                    keep[index:end] = False
+                    keep[index + offsets] = True
+                else:
+                    keep[index : end - keep_count] = False
                 index = end
                 continue
             keep_count = (

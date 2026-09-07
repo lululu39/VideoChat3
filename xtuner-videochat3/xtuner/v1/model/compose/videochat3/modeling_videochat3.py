@@ -190,7 +190,7 @@ class VideoChat3ForConditionalGeneration(BaseModel):
                 dist.barrier()
         elif (
             self.config.vision_config.macro_temporal_compression_factor > 1
-            or self.config.vision_config.macro_temporal_compression_mode == "chunk_select_last"
+            or self.config.vision_config.macro_temporal_compression_mode in ("chunk_select_last", "chunk_select_uniform")
             or self.config.vision_config.chunk_query
         ):
             if not dist.is_initialized() or dist.get_rank() == 0:

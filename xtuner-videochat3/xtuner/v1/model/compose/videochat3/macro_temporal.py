@@ -20,6 +20,7 @@ SUPPORTED_MACRO_TEMPORAL_COMPRESSION_MODES = (
     "select_last",
     "video_last",
     "chunk_select_last",
+    "chunk_select_uniform",
 )
 
 
@@ -45,7 +46,7 @@ def validate_macro_temporal_compression_mode(mode: str) -> str:
 def resolve_macro_temporal_compression_mode(
     mode: str,
     default: Literal["mean", "select_last"],
-) -> Literal["mean", "select_last", "video_last", "chunk_select_last"]:
+) -> Literal["mean", "select_last", "video_last", "chunk_select_last", "chunk_select_uniform"]:
     mode = validate_macro_temporal_compression_mode(mode)
     if mode == "auto":
         return default
@@ -81,7 +82,7 @@ def macro_clip_count(clip_count: int, factor: int, mode: str = "mean") -> int:
         mode = "mean"
     if clip_count <= 0:
         raise ValueError(f"clip_count must be positive, got {clip_count}")
-    if mode == "chunk_select_last":
+    if mode in ("chunk_select_last", "chunk_select_uniform"):
         validate_macro_temporal_compression_factor(factor)
         return clip_count
     if mode == "video_last":
@@ -94,7 +95,7 @@ def compress_chunk_outputs(
     chunk_outputs: list[torch.Tensor],
     video_clip_counts: Sequence[int],
     factor: int,
-    mode: Literal["mean", "select_last", "video_last", "chunk_select_last"],
+    mode: Literal["mean", "select_last", "video_last", "chunk_select_last", "chunk_select_uniform"],
 ) -> list[torch.Tensor]:
     """Compress per-chunk tensors without allowing groups to cross videos.
 
@@ -105,9 +106,11 @@ def compress_chunk_outputs(
     already traversed the encoder.
     ``chunk_select_last`` keeps the last max(1, floor(S / factor)) merged
     spatial tokens of every chunk, preserving every chunk and timestamp.
+    ``chunk_select_uniform`` keeps the same count at evenly spaced flattened
+    spatial indices, including both endpoints (the center when keeping one).
     """
     factor = validate_macro_temporal_compression_factor(factor)
-    if mode not in ("mean", "select_last", "video_last", "chunk_select_last"):
+    if mode not in ("mean", "select_last", "video_last", "chunk_select_last", "chunk_select_uniform"):
         raise ValueError(f"Unsupported macro temporal compression mode: {mode}")
     if sum(video_clip_counts) != len(chunk_outputs):
         raise ValueError(
@@ -118,6 +121,20 @@ def compress_chunk_outputs(
     # tensor objects, values, dtypes, and autograd graph exactly for normal R1.
     if factor == 1 and mode != "video_last":
         return chunk_outputs
+    if mode == "chunk_select_uniform":
+        if any(count <= 0 for count in video_clip_counts):
+            raise ValueError("video_clip_counts must be positive")
+        selected = []
+        for chunk in chunk_outputs:
+            size = chunk.shape[0]
+            count = max(1, size // factor)
+            indices = (
+                torch.arange(count, device=chunk.device) * (size - 1) // (count - 1)
+                if count > 1
+                else torch.tensor([size // 2], device=chunk.device)
+            )
+            selected.append(chunk.index_select(0, indices))
+        return selected
     if mode == "chunk_select_last":
         if any(count <= 0 for count in video_clip_counts):
             raise ValueError("video_clip_counts must be positive")
@@ -163,7 +180,7 @@ def compress_timestamps(
         mode = "mean"
     if mode == "video_last":
         return [float(timestamps[-1])]
-    if factor == 1 or mode == "chunk_select_last":
+    if factor == 1 or mode in ("chunk_select_last", "chunk_select_uniform"):
         return list(timestamps)
     if mode == "select_last":
         return [
@@ -192,7 +209,7 @@ def macro_video_token_count(
         )
     chunks = (time + temporal_merge_size - 1) // temporal_merge_size
     spatial_tokens = (height // spatial_merge_size) * (width // spatial_merge_size)
-    if mode == "chunk_select_last":
+    if mode in ("chunk_select_last", "chunk_select_uniform"):
         factor = validate_macro_temporal_compression_factor(factor)
         spatial_tokens = max(1, spatial_tokens // factor)
     return macro_clip_count(chunks, factor, mode=mode) * spatial_tokens

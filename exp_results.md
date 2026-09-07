@@ -1118,7 +1118,7 @@ Stop result: last global CE/pre-clip norm `0.33500308/2.35337234`, last-20 mean 
 
 ## v32 - Per-Chunk Original-Token Selection at v26's Query Budget
 
-**Status:** Running from initialization on 2026-09-07 after stopping v31 at the user's request. Cache parity and startup validation passed through step 3/276; no final checkpoint or native evaluation yet.
+**Status:** Stopped by the user after step 22/276 on 2026-09-07 to launch uniform-selection v33. No checkpoint or native evaluation exists; do not resume.
 
 - Objective: distinguish v26's learned-query interface from retaining the same number of original spatial tokens at every chunk with identical timestamps. Replace its queries with the last `max(1,floor(S/4))` post-merger spatial tokens per four-frame chunk.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, seed 42, Linear16 attention-share private projections, zero state/gates; no query parameters or query insertion. This removes query participation in local attention as well as query readout. Common source/seed does not guarantee bitwise-identical random FW beta initialization across constructors with/without query parameters.
@@ -1136,3 +1136,24 @@ Stop result: last global CE/pre-clip norm `0.33500308/2.35337234`, last-20 mean 
 Implementation validation: 42 vision/layout/HF-export tests pass. They verify exact post-merger tail selection and gradients, factors 1/2/4/8, multiple videos and short temporal tails, dynamic spatial counts, v26-equivalent video placeholder/timestamp strings, and Base/LACT HF save/load plus image/video processor alignment. The v32 launcher passes shell syntax validation.
 
 Startup validation: the new `chunktailr4` cache has bitwise-identical `num_tokens.npy` values to v26's R4-query cache for all 12,624 rows (16,669,984 total estimated tokens, maximum 2,297 per row); packing reproduces 4,401 packs / 276 steps. All ranks report `chunk_select_last`, factor 4 and query disabled; ViT/FW/projector are trainable and LM is frozen. Steps 1-3 global CE is `0.57831454/0.56878322/0.60864794`, with finite pre-clip norms `17.456587/16.133091/16.481060`. Steps 2-3 take `37.05/35.22s`, maximum rank allocated/reserved memory is `28.18/30.62 GB`, and no OOM, invalid gradient or placeholder mismatch occurs. Initial remaining ETA is about 3 hours. Native log: `torchrun_logs/training_20260907_043800_datava270000004.log`; detached session: `vc3-v32-20260907`. Public W&B uses the existing `yibozhong657 (LVSM-Experiment)` login.
+
+Stop result: last CE/pre-clip norm `0.26332021/5.27989531`; last-20 mean CE `0.37006614`; grad-norm mean/median/max over 22 steps `12.43254/10.1151/33.47834`. The user stopped this run to compare uniform spatial selection. Public W&B is marked failed with a user-stop note; logs are retained, no HF/DCP checkpoint was saved, and all eight GPUs were released. Lower training CE does not establish native evaluation quality.
+
+## v33 - Uniform Per-Chunk Original-Token Selection
+
+**Status:** Prepared for launch on 2026-09-07 after stopping v32 at the user's request; runtime validation pending.
+
+- Objective: isolate spatial selection positions by repeating v32 with deterministic uniform sampling instead of each chunk's spatial tail, at the same token/timestamp budget as v26.
+- Initialization: identical v32 source `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, seed 42, no query parameters, attention-share Linear16 private projections and zero state/gates. The model constructor and training scope are unchanged; only post-merger selection indices differ.
+- Data: identical seed-42 12,624-row TimeLens random-half manifest over 8,985 videos. Use a separate uniform-mode token cache and verify per-row counts against v32/v26; expected packing is 4,401 packs / 276 steps.
+- Trainable scope: `416,870,640` original ViT, `143,887,104` LACT-added and `33,039,616` projector parameters (`593,797,360` total); LM frozen.
+- Memory/output: parallel Linear16+Delta group 1, fast-Q/K 3D RoPE, zero linear gate, full apply-then-update recurrence, final update skipped. Set `macro_temporal_compression_mode="chunk_select_uniform"`, factor 4, queries disabled. For `K=max(1,floor(S/4))`, select flattened spatial indices `floor(i*(S-1)/(K-1))` when `K>1`, or `floor(S/2)` when `K=1`. This preserves order, covers endpoints, and retains every chunk/timestamp; it is not a separate 2D sampling lattice.
+- Optimizer/LR schedule: identical v32/v26 AdamW, uniform ViT/FW/projector LR, 3% warmup and cosine `2e-5 -> 1e-6`, weight decay 0, one epoch, initial inner Delta strength `0.01`, no gate-specific LR.
+- Stabilization: no NS5 or FW ratio clips, global clip 1.0, full BPTT and ordinary FSDP checkpointing; CPU offload disabled.
+- Hardware/batch/sequence: 8xH100, global batch 16, 4K sample/pack limits, 2 FPS, 64-448 frames, total-pixel budget 14,680,064. `GPU_EXCLUSIVE=0`; no watchdog terminates unrelated jobs.
+- Training W&B: [`v33`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-chunkuniformr4-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v33).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_CHUNKUNIFORMR4_VITFWPROJ_train_timelens_v33.sh`.
+- Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-gate0-chunkuniformr4-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v33/<timestamp>/hf-276`.
+- Evaluation: native TimeLens-Bench R1@0.3/0.5/0.7 and mIoU versus v26 (`36.98/37.55/48.75%` mIoU), plus matched-step training comparisons with the stopped v32. No native v32 checkpoint exists. Inspect final gates, FW and original-model parameter deltas after completion; no teacher-forced evaluation.
+
+Implementation validation: 52 vision/layout/HF-export tests pass, covering both selection modes, deterministic indices and gradients, all supported factors, short tails, query-budget placeholder/timestamp parity, and Base/LACT HF model/processor round trips. The v33 launcher differs from v32 only in run/cache identity and `chunk_select_last -> chunk_select_uniform`.
