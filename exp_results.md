@@ -1051,7 +1051,7 @@ Conclusion: serial topology destroys the successful v26 joint-adaptation result.
 
 ## v29 - Parallel Video-Last, Train ViT + FW + Projector
 
-**Status:** Clean activation-offload restart is running on 2026-09-07. Steps 1-2 exactly reproduce original v29 CE, and the previously failing step 3 completes without OOM. Model, samples, packing, optimizer, and full BPTT remain unchanged; no final checkpoint or evaluation yet.
+**Status:** Stopped by the user after step 15/114 on 2026-09-07 to prioritize v26 reproduction. No checkpoint or evaluation exists; do not resume.
 
 - Objective: test the remaining interaction between successful v26-style parallel joint adaptation and the previously failed final-chunk-only output. Repeat v19 exactly while adding the original ViT to the trainable scope.
 - Initialization: identical to v19, `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, with attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state/gates, and no chunk-query parameters.
@@ -1071,3 +1071,22 @@ Clean startup: steps 1-3 CE is `0.80019104/0.78642583/0.78507501`, with finite g
 Memory diagnostic before offload: step-1/2 CE `0.80019104/0.78642583`, pre-clip norms `2.56830072/2.71148419`, and step-2 time `234.47s`. Step 1 exactly matches v19, but step-2 peak allocation reaches `76.31 GB`. Step-3 backward fails while requesting `3.58 GiB` with only `2.37 GiB` free; all ranks then exit and no checkpoint exists. Native log: original v29 run root `torchrun_logs/training_20260907_010503_datava270000004.log`. The clean offload restart uses a separate W&B ID to avoid mixing histories. A CUDA/BF16 test verifies bitwise-equal outputs and parameter gradients with active memory gates for joint-training and frozen-ViT scopes, plus unchanged state-dict keys and strict loading.
 
 The first offload attempt is invalid and stopped after step 1: its CE `0.72150457` exposed an HF loader bug where adjacent checkpoint/offload wrappers left a wrapper component in parameter names, silently skipping vision-block weights. The loader now removes wrapper path components at any nesting depth; a regression test loads every parameter through the actual HF parameter-loading traversal and checks exact values. The clean restart must reproduce the original v29 CE/gradient before acceptance. The earlier shared-GPU launch also produced no checkpoint or reusable resume state.
+
+Stop result: last global CE `0.40861088`, pre-clip norm `0.24401857`; norms over all 15 completed steps have mean/median/max `1.783118/2.277101/3.235573`. All are finite. The user stopped this direction after the norm decreased and prioritized verifying v26; this early stop does not establish native grounding performance. The training processes exited and all eight GPUs were released. Logs and W&B history are retained; no HF/DCP checkpoint was saved.
+
+## v30 - Independent Same-Seed Reproduction of v26
+
+**Status:** Prepared for a fresh run after stopping v29; startup validation pending.
+
+- Objective: reproduce v26's successful parallel learned-query joint adaptation in a separate run. This is a same-seed reproducibility check, not a different-seed robustness test.
+- Initialization: original `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, seed 42, attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state and linear gates, and the same 16-slot truncated-normal query initialization. Do not load v26's trained checkpoint.
+- Data: identical seed-42 12,624-row TimeLens random-half manifest over 8,985 videos and the exact v24/v26 4,401-pack query cache, preserving sample order.
+- Trainable scope: `416,870,640` original ViT parameters, `143,905,536` LACT-added parameters including queries/gates, and `33,039,616` projector parameters (`593,815,792` total). Only the 4B LM is frozen.
+- Memory/output: parallel Linear16+Delta, group 1, fast-Q/K 3D RoPE, zero linear gate, apply-then-update, final update skipped. Each four-frame chunk retains `max(1,floor(S/4))` learned queries (16 at 224px); queries read memory and participate in attention but never write memory.
+- Optimizer/LR schedule: identical v26 AdamW, uniform ViT/FW/query/gate/projector LR, 3% warmup and cosine `2e-5 -> 1e-6`, weight decay 0, one epoch, initial inner write strength `0.01`, and no gate-specific LR.
+- Stabilization: no FW ratio clips or NS5; global gradient clip 1.0. Ordinary full vision/LM checkpointing with CPU activation offload explicitly disabled, matching v26.
+- Hardware/batch/sequence: 8xH100 ordinary FSDP, global batch 16, 4K sample/pack limit, 2 FPS, 64-448 frames, total-pixel budget 14,680,064, 4,401 packs / 276 steps. Use `GPU_EXCLUSIVE=0`; no watchdog terminates unrelated jobs.
+- Training W&B: [`v30`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v26repro-v30).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_LINEAR16_DELTA_3DROPE_PARALLEL_GATE0_R4QUERY_VITFWPROJ_train_timelens_v30.sh`.
+- Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-gate0-r4query-vitfwproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v26repro-v30/<timestamp>/hf-276`.
+- Acceptance/reference: first-step CE must match v26 `0.75414109`; compare subsequent matched-step loss/gradients and final native TimeLens-Bench scores. v26's last-20 CE is `0.2606` and Charades/ActivityNet/QVHighlights mIoU is `36.98/37.55/48.75%`. Record checkpoint diagnostics and native R1@0.3/0.5/0.7 plus mIoU after completion; no teacher-forced evaluation.
