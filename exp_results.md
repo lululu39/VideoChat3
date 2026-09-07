@@ -1141,7 +1141,7 @@ Stop result: last CE/pre-clip norm `0.26332021/5.27989531`; last-20 mean CE `0.3
 
 ## v33 - Uniform Per-Chunk Original-Token Selection
 
-**Status:** Running from initialization on 2026-09-07 after stopping v32 at the user's request. Cache parity and startup validation passed through step 3/276; no final checkpoint or native evaluation yet.
+**Status:** Stopped by the user after step 26/276 on 2026-09-07 to run the no-FW Base control v34. No checkpoint or native evaluation exists; do not resume.
 
 - Objective: isolate spatial selection positions by repeating v32 with deterministic uniform sampling instead of each chunk's spatial tail, at the same token/timestamp budget as v26.
 - Initialization: identical v32 source `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, seed 42, no query parameters, attention-share Linear16 private projections and zero state/gates. The model constructor and training scope are unchanged; only post-merger selection indices differ.
@@ -1159,3 +1159,22 @@ Stop result: last CE/pre-clip norm `0.26332021/5.27989531`; last-20 mean CE `0.3
 Implementation validation: 52 vision/layout/HF-export tests pass, covering both selection modes, deterministic indices and gradients, all supported factors, short tails, query-budget placeholder/timestamp parity, and Base/LACT HF model/processor round trips. The v33 launcher differs from v32 only in run/cache identity and `chunk_select_last -> chunk_select_uniform`.
 
 Startup validation: uniform-mode `num_tokens.npy` is bitwise identical to both v32 and v26 caches for all 12,624 rows (16,669,984 total estimated tokens, maximum 2,297), reproducing 4,401 packs / 276 steps. ViT/FW/projector are trainable, LM frozen and queries disabled. Steps 1-3 global CE is `0.55709684/0.55141866/0.59137642`, with finite pre-clip norms `15.213007/13.768787/17.070650`. Steps 2-3 take `37.09/35.34s`, maximum rank allocated/reserved memory is `28.18/30.64 GB`, and there is no OOM or placeholder mismatch. Initial remaining ETA is about 3 hours. Native log: `torchrun_logs/training_20260907_045630_datava270000004.log`; detached session: `vc3-v33-20260907`. Public W&B uses the existing `yibozhong657 (LVSM-Experiment)` login.
+
+Stop result: last CE/pre-clip norm `0.27782860/7.13802624`; last-20 mean CE `0.29464084`; grad-norm mean/median/max over 26 steps `13.01032/12.5489/24.30164`. The user requested a Base ViT/projector control. Public W&B is marked failed with the stop reason; logs are retained, no HF/DCP checkpoint was saved, and all eight GPUs were released. No native quality comparison with queries is established by this partial training run.
+
+## v34 - Base Uniform Per-Chunk Selection, ViT + Projector
+
+**Status:** Prepared for a fresh Base run on 2026-09-07 after stopping v33; startup validation pending.
+
+- Objective: repeat v33's uniform per-chunk spatial-token output without any LACT/FW branch, testing whether original ViT/projector adaptation alone explains the strong training fit.
+- Initialization: pinned original `/mnt/localssd/VideoChat3/VideoChat3-4B`, seed 42. These original ViT/LM/projector tensors are identical to the retained LACT initialization's corresponding tensors. No FW, memory gate or learned-query parameters are instantiated; do not reuse trained v33 weights.
+- Data: same seed-42 12,624-row TimeLens random-half manifest over 8,985 videos. Build a Base-specific uniform-mode cache and verify counts against v33/v26; expected 4,401 packs / 276 steps, identical ordering.
+- Trainable scope: all `416,870,640` original ViT parameters and `33,039,616` projector parameters (`449,910,256` total). The 4B LM is frozen; there are no FW optimizer groups.
+- Vision/output: original Base four-frame local attention and MLP, no memory read/update/state or private projections. Retain `macro_temporal_compression_mode="chunk_select_uniform"`, factor 4, queries disabled. Each chunk keeps `K=max(1,floor(S/4))` original merged spatial tokens at v33's exact flattened uniform indices and retains its timestamp.
+- Optimizer/LR schedule: identical surviving v33 groups, AdamW with uniform ViT/projector LR, 3% warmup and cosine `2e-5 -> 1e-6`, weight decay 0, one epoch.
+- Stabilization: global gradient clip 1.0 and ordinary FSDP activation checkpointing, CPU offload disabled; FW stabilization is inapplicable.
+- Hardware/batch/sequence: 8xH100, global batch 16, 4K sample/pack limits, 2 FPS, 64-448 frames, total-pixel budget 14,680,064. `GPU_EXCLUSIVE=0`; no watchdog terminates unrelated jobs.
+- Training W&B: [`Base v34`](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-base-chunkuniformr4-vitproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v34).
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_BASE_CHUNKUNIFORMR4_VITPROJ_train_timelens_v34.sh`.
+- Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-base-chunkuniformr4-vitproj-timelens-r12624-8xh100-gb16-f448-s4k-lr2e5-v34/<timestamp>/hf-276`, exported as a Base `videochat3_macro` model with matching uniform-selection processor metadata.
+- Acceptance/evaluation: first-step CE should reproduce zero-gate v33 `0.55709684`; compare matched-step training trajectories with v33 and final native TimeLens-Bench R1@0.3/0.5/0.7 and mIoU with completed references. v33 has no native checkpoint, so do not claim native Base-vs-v33 parity. Inspect original ViT/projector deltas and frozen-LM integrity after completion; no teacher-forced evaluation.
