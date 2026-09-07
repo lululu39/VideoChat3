@@ -1164,7 +1164,7 @@ Stop result: last CE/pre-clip norm `0.27782860/7.13802624`; last-20 mean CE `0.2
 
 ## v34 - Base Uniform Per-Chunk Selection, ViT + Projector
 
-**Status:** Running from the original Base initialization on 2026-09-07 after stopping v33. Cache parity and startup validation passed; no final checkpoint or native evaluation yet.
+**Status:** Stopped by the user after step 67/276 on 2026-09-07. No checkpoint or native evaluation exists; do not resume. No replacement experiment is active.
 
 - Objective: repeat v33's uniform per-chunk spatial-token output without any LACT/FW branch, testing whether original ViT/projector adaptation alone explains the strong training fit.
 - Initialization: pinned original `/mnt/localssd/VideoChat3/VideoChat3-4B`, seed 42. These original ViT/LM/projector tensors are identical to the retained LACT initialization's corresponding tensors. No FW, memory gate or learned-query parameters are instantiated; do not reuse trained v33 weights.
@@ -1180,3 +1180,5 @@ Stop result: last CE/pre-clip norm `0.27782860/7.13802624`; last-20 mean CE `0.2
 - Acceptance/evaluation: first-step CE should reproduce zero-gate v33 `0.55709684`; compare matched-step training trajectories with v33 and final native TimeLens-Bench R1@0.3/0.5/0.7 and mIoU with completed references. v33 has no native checkpoint, so do not claim native Base-vs-v33 parity. Inspect original ViT/projector deltas and frozen-LM integrity after completion; no teacher-forced evaluation.
 
 Startup validation: Base cache token counts are bitwise identical to v33 for all 12,624 rows (16,669,984 estimated tokens), and packing reproduces 4,401 packs / 276 steps. Runtime reports `416.0M` ViT and `33.0M` projector trainable, `0.0M` FW/LM, and only ViT/projector optimizer groups. Steps 1-3 CE is `0.55709684/0.55141866/0.58837789`; the first two exactly match v33, with finite pre-clip norms `15.153981/13.743176/28.203415`. Maximum rank allocated/reserved memory through step 3 is `19.49/21.50 GB`. Steps 2-3 take `9.26/8.87s`, with no OOM or placeholder mismatch; initial remaining ETA is about 40-45 minutes. Native log: `torchrun_logs/training_20260907_051509_datava270000004.log`; detached session: `vc3-base-v34-20260907`. Public W&B uses the existing `yibozhong657 (LVSM-Experiment)` login.
+
+Stop result: last CE/pre-clip norm `0.28731191/4.61231661`; last-20 mean CE `0.26874645`; grad-norm mean/median/max over 67 steps `8.958851/6.635262/31.417261`. Matched steps 7-26 mean CE is `0.29336003` versus v33 `0.29464084`, showing similar training fit without FW but not establishing native evaluation parity. Public W&B is marked failed with the user-stop reason; logs are retained, no HF/DCP checkpoint was saved, and all eight GPUs were released. No further experiment was launched.
