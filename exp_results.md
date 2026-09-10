@@ -2,7 +2,7 @@
 
 ## v38 - TimeLens Multi-Stage Transfer from v37 hf-200
 
-**Status:** Prepared for launch on physical GPUs 4–7. No native evaluation requested.
+**Status:** Running on physical GPUs 4–7; the first two optimizer steps completed with finite loss/gradients. No native evaluation requested.
 
 - Objective: apply the v36 `multi_stage_video_last` recipe to the user-selected v37 `hf-200`, ending with a native final-chunk-only checkpoint.
 - Initialization: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-alltokens-vitfwproj-llava0to30-qa495013-4xh100-gb16-f64-s8k-lr2e5-v37/20260910193237/hf-200`; all 923 tensors / three indexed shards verified. Preserve trained ViT/FW/beta/gates/projector; fresh optimizer, scheduler, dataloader, and W&B run.
@@ -12,12 +12,14 @@
 - Optimizer/LR schedule: v36 AdamW, common `2e-5 -> 1e-6`, weight decay 0, one epoch, 3% warmup (expected 12 steps), continuous Adam state and cosine schedule across stages. No v37 800-step limit or 5,158-step LR override.
 - Stabilization: full BPTT, global gradient clip 1.0, no NS5/FW ratio clips; ordinary FSDP activation checkpointing with CPU vision activation offload.
 - Hardware/batch/sequence: four H100s on physical GPUs 4–7, global batch 16, 8K sample/pack length; 2 FPS, 64–448 frames, 224px frame cap, 14,680,064 total pixels.
-- Checkpoints: HF/DCP every stage boundary and every 200 steps; keep ten HF and two DCP checkpoints. Expected final artifact `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-parallel-3drope-multi_stage_video_last-timelens-r12624-v37hf200-4xh100-gb16-s8k-v38/<timestamp>/hf-417`; native `video_last` model/processor metadata.
+- Checkpoints: HF/DCP every stage boundary and every 200 steps; keep ten HF and two DCP checkpoints. Expected final artifact `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-parallel-3drope-multi_stage_video_last-timelens-r12624-v37hf200-4xh100-gb16-s8k-v38/20260910214721/hf-417`; native `video_last` model/processor metadata.
 - W&B: [v38](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-parallel-3drope-multi_stage_video_last-timelens-r12624-v37hf200-4xh100-gb16-s8k-v38), public login reused. Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_multi_stage_video_last_timelens_v38.sh`.
 
 Transfer correction: code inspection found the previous native Linear `from_hf` unconditionally reset its memory branch, including trained gates. The loader now preserves complete Linear checkpoints and retains attention share-init only for Base/SwiGLU conversion; incomplete Linear memory checkpoints fail explicitly. Thus v38 inherits the actual trained v37 FW state. Historical v36's claimed FW/gate preservation is not supported by its pre-fix loader and requires separate audit; it is not a strict matched-weight control for v38.
 
 Transfer validation: `v37/20260910193237/v38_transfer_loading_validation.json` verifies all 519 native vision tensors exactly equal the selected HF source after FP32 loading, including all FW/beta/gates and original ViT. All 31,104 trained gate elements are retained (RMS `1.79779e-4`).
+
+Startup validation: actual 12,624 rows / 6,658 packs / 417 steps match the recipe; stage 1 spans steps 1–53. Steps 1–2 global CE `0.246578/0.282748`, finite pre-clip norms `11.4631/11.9502`, and common ViT/FW/projector LRs `0/1.666667e-6`. Rank-0 peak allocation/reservation `19.91/21.09 GB`; step 2 compute time `55.09s`. No OOM or placeholder mismatch; decoder emitted H.264/seek warnings, but both optimizer steps completed. Public W&B reports `running`. Launch commit `b4d8f76`; detached session `vc3-v38-20260910`; native log run-root `torchrun_logs/training_20260910_214708_lucia6750000000.log`. Five focused loader/curriculum-export regression tests passed.
 
 ## v37 - v35 Recipe with Automatic Stop at Step 800
 
