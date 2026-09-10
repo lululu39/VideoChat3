@@ -93,3 +93,7 @@ class LRConfig(BaseModel):
         Optional[float],
         Parameter(help="Optional minimum LR as a ratio of each parameter group's initial LR."),
     ] = None
+    schedule_steps: Annotated[
+        Optional[int],
+        Parameter(help="Optional LR schedule horizon independent of the training stop step."),
+    ] = None

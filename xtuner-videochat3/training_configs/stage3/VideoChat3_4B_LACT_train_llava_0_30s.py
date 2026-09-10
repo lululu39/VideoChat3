@@ -16,6 +16,12 @@ if max_steps:
     trainer.total_step = max_steps
     # The shared scheduler interprets values >= 1 as an explicit warmup-step count.
     trainer.lr_cfg.warmup_ratio = max(1, int(0.03 * max_steps))
+schedule_steps = int(os.getenv("VIDEOCHAT3_LR_SCHEDULE_STEPS", "0"))
+if schedule_steps:
+    if schedule_steps < max_steps or schedule_steps < 2:
+        raise ValueError("LR schedule horizon must cover the requested training steps")
+    trainer.lr_cfg.schedule_steps = schedule_steps
+    trainer.lr_cfg.warmup_ratio = 0.03
 trainer.hf_interval = int(os.getenv("VIDEOCHAT3_HF_INTERVAL", "200"))
 trainer.checkpoint_interval = int(os.getenv("VIDEOCHAT3_CHECKPOINT_INTERVAL", "200"))
 trainer.wandb_config.group = "videochat3-llava-0-30s-adaptation"

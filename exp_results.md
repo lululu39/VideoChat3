@@ -1,5 +1,20 @@
 # Experiment Results
 
+## v37 - v35 Recipe with Automatic Stop at Step 800
+
+**Status:** Prepared for launch on physical GPUs 4–7; stop automatically after saving `hf-800`. No native evaluation requested.
+
+- Objective: reproduce v35's short-video adaptation recipe through step 800 and retain its final HF checkpoint for later training.
+- Initialization: fresh `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, seed 42; pinned Base weights unchanged, attention-share-initialized Linear16 private Q/K/V/O, zero linear gates/state. The fresh export is Linear16 rather than the historical SwiGLU container; both training recipes rebuild the Linear memory branch during HF initialization. Historical beta initialization is not claimed bitwise identical.
+- Data: pinned LLaVA-Video-178K `6d8c562dc26d70042a0d9704d1cae58c94b89098`, Academic/YouTube 0–30s QA; `LLaVA_Video_0_30s_train_VideoChat3.json` under `/mnt/localssd/dataset/VideoChat3/LLaVA-Video-178K`, 495,013 conversations / 2,242,912 QA turns. Captions and 44,957 held-out questions excluded; benchmark/split ID overlap zero. Expected native seed-42 packing: 82,518 packs / 5,158 full-epoch steps.
+- Trainable scope: original ViT, all LACT FW/gates, and projector; LM frozen, no query parameters. Parallel Linear16+Delta, group 1, fast-Q/K 3D RoPE, all original merged visual tokens and timestamps, inner write strength `0.01`.
+- Optimizer/LR schedule: v35 AdamW, common ViT/FW/projector LR, weight decay 0; preserve the original 5,158-step cosine `2e-5 -> 1e-6` with 154 warmup steps. Training ends at 800; the LR schedule is not compressed to 800. HF/DCP saves every 200 steps and at completion, retaining the latest of each.
+- Stabilization: no NS5 or FW ratio clips; global gradient clip 1.0, full BPTT, ordinary FSDP activation checkpointing, CPU vision activation offload disabled.
+- Hardware/batch/sequence: four H100s, `CUDA_VISIBLE_DEVICES=4,5,6,7`; global batch 16, four accumulations/rank, 8K sample/pack limits; 2 FPS, 64-frame min/max bounded by source frames, 224px frame cap, 3,211,264 total pixels.
+- W&B: [v37](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-alltokens-vitfwproj-llava0to30-qa495013-4xh100-gb16-f64-s8k-lr2e5-v37), public API using the user-provided login stored outside Git.
+- Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_ALLTOKENS_train_llava_0_30s_v37.sh`.
+- Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-alltokens-vitfwproj-llava0to30-qa495013-4xh100-gb16-f64-s8k-lr2e5-v37/<timestamp>/hf-800`.
+
 ## Rules
 
 - Keep one concise section per numbered experiment, including data, training configuration, checkpoint, parameter diagnostics, Base-vs-LACT evaluation, and conclusion.

@@ -984,6 +984,10 @@ class Trainer:
         Returns:
             torch.optim.lr_scheduler.LRScheduler: Configured learning rate scheduler.
         """
+        if lr_cfg.schedule_steps is not None:
+            if lr_cfg.schedule_steps <= 0:
+                raise ValueError("schedule_steps must be positive")
+            scheduler_step = lr_cfg.schedule_steps
         if lr_cfg.warmup_ratio < 1:
             warmup_steps = int(lr_cfg.warmup_ratio * scheduler_step)
         else:

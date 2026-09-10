@@ -1,6 +1,6 @@
 # Video Training Data Search
 
-Last reviewed: 2026-09-09.
+Last reviewed: 2026-09-10.
 
 ## Selection Criteria
 
@@ -63,6 +63,8 @@ uv run --frozen python scripts/prepare_llava_video_0_30s.py
 uv run --frozen python scripts/check_llava_video_0_30s.py --output all
 ```
 
+On a fresh machine, first run `uv sync --frozen`, download the pinned Base checkpoint specified in `AGENTS.md`, then run `uv run --frozen python scripts/create_videochat3_lact_init.py`. This creates `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init` as a fresh parallel Linear16+Delta initialization with fast-Q/K 3D RoPE, zero gates, no queries, all original visual tokens, and no FW ratio clips. It verifies the 28 official Base files, all 734 unchanged Base tensors, all 27 attention-share-initialized Q/K/V/O branches, independent HF loading, and bitwise zero-gate vision/full-VLM parity. The new 8.61 GiB artifact contains 189 added tensors / 143.89M parameters; historical experiments used a SwiGLU initialization with 270 added tensors at this path. This fresh initialization does not contain v35's trained `hf-800` weights required by the v36 transfer launcher. Use a new experiment record/name for future training.
+
 Preparation checks official file sizes at the pinned revision, streams safe archive extraction, verifies all annotation paths, and decodes every frame selected by the 64-frame recipe. Interrupted runs reuse extraction markers and a size/mtime-keyed decode cache. Use `--skip-download` after the snapshot has arrived, and `--skip-download --skip-extract` to reconvert existing media. Optional `--delete-archives` removes compressed shards only after preparation completes; subsequent reruns then require both skip flags to avoid redownloading them.
 
 Data handling:
@@ -116,6 +118,7 @@ The official snapshot is prepared at `/mnt/localssd/dataset/VideoChat3/TimeLens-
 - The source JSONL contains 96,586 valid single-span events. The pure-video filter removes 7,468 explicit speech/audio-semantic queries; two duration-mismatched videos remove another ten events, leaving 89,108 full events over 19,387 videos.
 - Reproducing the official seed-42 duration-balanced target-30K selection yields 25,247 events over 13,790 videos because the longest duration buckets are smaller than their 3,333-event quota.
 - `scripts/prepare_timelens_100k.py` emits the balanced and full VideoChat3 JSONL/manifests plus `timelens_100k_conversion_summary.json`.
+- After conversion, run `uv run --frozen python scripts/sample_timelens_videochat3.py` to reproduce the seed-42 random-half subset: `TimeLens100K_Visual_Random12624_VideoChat3.json`, with 12,624 events over 8,985 videos. `timelens_100k_random_12624_summary.json` records the source, selected-index, and output hashes.
 - The default recipe matches TimeLens at 2 FPS, 64-448 frames, and a 14,680,064 total-pixel budget, while rounding frames to four for LACT. Every balanced sample fits the 8K context; mean/P95/max lengths are `3,454/5,305/5,662` tokens.
 - A real 498.9-second sample successfully decoded 448 frames and produced matching cache/runtime lengths of 4,766 tokens with 18 supervised answer tokens.
 - Use `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FW_train_timelens.sh` after creating the next numbered experiment record and setting `WANDB_NAME`.
