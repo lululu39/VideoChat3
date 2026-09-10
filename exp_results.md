@@ -1,8 +1,29 @@
 # Experiment Results
 
+## v38 - TimeLens Multi-Stage Transfer from v37 hf-200
+
+**Status:** Prepared for launch on physical GPUs 4–7. No native evaluation requested.
+
+- Objective: apply the v36 `multi_stage_video_last` recipe to the user-selected v37 `hf-200`, ending with a native final-chunk-only checkpoint.
+- Initialization: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-alltokens-vitfwproj-llava0to30-qa495013-4xh100-gb16-f64-s8k-lr2e5-v37/20260910193237/hf-200`; all 923 tensors / three indexed shards verified. Preserve trained ViT/FW/beta/gates/projector; fresh optimizer, scheduler, dataloader, and W&B run.
+- Data: TimeLens-100K pinned `75e03f54a19b814de6dc8f5fceb19090625f4844`, visual seed-42 random-half manifest `TimeLens100K_Visual_Random12624_VideoChat3.json`, 12,624 rows / 8,985 videos. One fixed all-token packing/order across all stages; expected 6,658 packs / 417 optimizer steps.
+- Trainable scope: original ViT, Linear16 FW/gates and projector; LM frozen, no queries. Parallel Linear16+Delta, fast-Q/K 3D RoPE, group 1, trained linear gates, all input frames traverse the recurrent encoder.
+- Curriculum: all chunks -> final chunk per group of 2/4/8/16/32/64 -> per-video final chunk. Expected stage lengths 53/52/52/52/52/52/52/52; retain incomplete tails and matching timestamps/placeholders.
+- Optimizer/LR schedule: v36 AdamW, common `2e-5 -> 1e-6`, weight decay 0, one epoch, 3% warmup (expected 12 steps), continuous Adam state and cosine schedule across stages. No v37 800-step limit or 5,158-step LR override.
+- Stabilization: full BPTT, global gradient clip 1.0, no NS5/FW ratio clips; ordinary FSDP activation checkpointing with CPU vision activation offload.
+- Hardware/batch/sequence: four H100s on physical GPUs 4–7, global batch 16, 8K sample/pack length; 2 FPS, 64–448 frames, 224px frame cap, 14,680,064 total pixels.
+- Checkpoints: HF/DCP every stage boundary and every 200 steps; keep ten HF and two DCP checkpoints. Expected final artifact `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-parallel-3drope-multi_stage_video_last-timelens-r12624-v37hf200-4xh100-gb16-s8k-v38/<timestamp>/hf-417`; native `video_last` model/processor metadata.
+- W&B: [v38](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-parallel-3drope-multi_stage_video_last-timelens-r12624-v37hf200-4xh100-gb16-s8k-v38), public login reused. Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_multi_stage_video_last_timelens_v38.sh`.
+
+Transfer correction: code inspection found the previous native Linear `from_hf` unconditionally reset its memory branch, including trained gates. The loader now preserves complete Linear checkpoints and retains attention share-init only for Base/SwiGLU conversion; incomplete Linear memory checkpoints fail explicitly. Thus v38 inherits the actual trained v37 FW state. Historical v36's claimed FW/gate preservation is not supported by its pre-fix loader and requires separate audit; it is not a strict matched-weight control for v38.
+
+Transfer validation: `v37/20260910193237/v38_transfer_loading_validation.json` verifies all 519 native vision tensors exactly equal the selected HF source after FP32 loading, including all FW/beta/gates and original ViT. All 31,104 trained gate elements are retained (RMS `1.79779e-4`).
+
 ## v37 - v35 Recipe with Automatic Stop at Step 800
 
-**Status:** Running on public W&B on physical GPUs 4–7, launched 2026-09-10; validated through step 3/800. Stops automatically after saving `hf-800`. No native evaluation requested.
+**Status:** Stopped by the user at step 204/800 on 2026-09-10. Retain `20260910193237/hf-200` for v38 TimeLens transfer; discard later unsaved updates. Do not resume v37. No native evaluation requested.
+
+Stop diagnostics: first-50 / steps-151–200 mean global CE is `0.98901/0.74837`; all 204 pre-clip norms are finite (mean `7.557`, max `58.994`) and exceed the global clip threshold. `20260910193237/checkpoint_inspection_hf200.json` reports gate RMS/max-absolute `1.79779e-4/8.27789e-4`; FW private/value relative deltas `0.3847%/0.4741%`; original attention/MLP/other-ViT deltas `0.6173%/0.2982%/0.0229%`; projector delta `1.1426%`. LM and memory norms are bitwise unchanged. The beta group compares against the exported template, not the FP32 beta rebuilt at v37 startup, so its delta is not a training-movement measurement. All v37 processes exited; W&B records the intentional user stop/transfer (backend state `failed` after interrupt), with `hf-200` identified as the retained artifact.
 
 - Objective: reproduce v35's short-video adaptation recipe through step 800 and retain its final HF checkpoint for later training.
 - Initialization: fresh `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, seed 42; pinned Base weights unchanged, attention-share-initialized Linear16 private Q/K/V/O, zero linear gates/state. The fresh export is Linear16 rather than the historical SwiGLU container; both training recipes rebuild the Linear memory branch during HF initialization. Historical beta initialization is not claimed bitwise identical.
@@ -18,6 +39,7 @@
 Startup validation: 495,013 rows / 82,518 packs match v35; ViT/FW/projector trainable, LM frozen. Steps 1–3 global CE `1.08372068/1.04959106/1.00614452`, finite pre-clip norms `6.33013/7.97234/6.61381`, and common group LRs `0/1.298701e-7/2.597403e-7`. Maximum observed rank-0 allocation/reservation `22.44/23.99 GB`; stable steps approximately 36 seconds, initial remaining ETA approximately eight hours. No OOM, skipped update, or placeholder mismatch. Two scheduler tests verify the entire first-800-step v35 LR trajectory and resumed scheduler continuity; config validation confirms total step 800, LR horizon 5,158, warmup 154, and HF/DCP interval 200. Public W&B confirms the run is active. Native log: run-root `torchrun_logs/training_20260910_193224_lucia6750000000.log`; detached session `vc3-v37-20260910`; executable launch commit `91499b2`.
 
 ## Rules
+
 
 - Keep one concise section per numbered experiment, including data, training configuration, checkpoint, parameter diagnostics, Base-vs-LACT evaluation, and conclusion.
 - Reuse the fixed Base results below for the same evaluation protocol; run only the new LACT checkpoint unless the model, data, prompt, decoding, or benchmark configuration changes.

@@ -35,6 +35,8 @@ def parameter_group(name: str) -> str:
         return "fw_value_projection"
     if ".lr_proj." in name:
         return "fw_lr_projection"
+    if ".beta_proj." in name:
+        return "fw_beta_projection"
     if ".memory_norm." in name:
         return "fw_memory_norm"
     if name.startswith("model.vision_tower"):

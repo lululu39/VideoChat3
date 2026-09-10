@@ -10,4 +10,8 @@ trainer.checkpoint_interval = 200
 trainer.hf_max_keep = 10
 trainer.checkpoint_maxkeep = 2
 trainer.wandb_config.group = "timelens-multi_stage_video_last"
-trainer.wandb_config.tags.extend(["multi_stage_video_last", "llava-hf800-init", "fixed-all-token-packing"])
+trainer.wandb_config.tags.extend([
+    "multi_stage_video_last",
+    os.getenv("VIDEOCHAT3_INIT_TAG", "llava-hf800-init"),
+    "fixed-all-token-packing",
+])

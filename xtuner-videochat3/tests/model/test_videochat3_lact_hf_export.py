@@ -131,6 +131,50 @@ def _tiny_model_config():
     )
 
 
+@pytest.mark.parametrize("source_memory", ["linear", "swiglu", "partial_linear"])
+def test_linear_transfer_preserves_trained_branch_or_share_initializes(tmp_path, source_memory):
+    cfg = _tiny_model_config()
+    cfg.vision_config.memory_type = source_memory.removeprefix("partial_")
+    cfg.vision_config.fw_num_heads = 4
+    cfg.vision_config.inner_optim = "delta"
+    cfg.vision_config.lact_chunk_query = False
+    base_path, save_path = tmp_path / "base", tmp_path / "saved"
+    base_path.mkdir()
+    _write_tiny_base_config(base_path, cfg)
+    model = cfg.build()
+    with torch.no_grad():
+        for name, param in model.vision_tower.named_parameters():
+            if model.vision_tower._is_lact_state_key(name):
+                param.add_(0.125)
+    expected = {k: v.to(torch.bfloat16).float() for k, v in model.vision_tower.state_dict().items()}
+    model.set_hf(base_path)
+    model.save_hf(save_path)
+    if source_memory == "partial_linear":
+        from safetensors.torch import load_file, save_file
+        index_path = save_path / "model.safetensors.index.json"
+        index = json.loads(index_path.read_text())
+        gate_key = next(k for k in index["weight_map"] if k.endswith("memory_gate"))
+        shard = save_path / index["weight_map"].pop(gate_key)
+        tensors = load_file(shard)
+        del tensors[gate_key]
+        save_file(tensors, shard)
+        index_path.write_text(json.dumps(index))
+    cfg.vision_config.memory_type = "linear"
+    restored = cfg.build()
+    if source_memory == "partial_linear":
+        with pytest.raises(RuntimeError, match="Incomplete Linear LACT"):
+            restored.from_hf(save_path, strict=True)
+        return
+    restored.from_hf(save_path, strict=True)
+    if source_memory == "linear":
+        for key, value in restored.vision_tower.state_dict().items():
+            torch.testing.assert_close(value, expected[key], rtol=0, atol=0)
+    else:
+        for block in restored.vision_tower.encoder.blocks:
+            assert torch.all(block.memory_gate == cfg.vision_config.lact_gate_init)
+            torch.testing.assert_close(block.memory.apply_proj[0].weight, block.wqkv.weight.chunk(3)[0], rtol=0, atol=0)
+
+
 def _tiny_base_query_model_config():
     vision_config = VideoChat3VisionConfig(
         hidden_size=16,

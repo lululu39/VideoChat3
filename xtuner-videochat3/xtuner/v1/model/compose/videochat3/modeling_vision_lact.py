@@ -1,3 +1,4 @@
+import json
 import math
 from pathlib import Path
 
@@ -2055,11 +2056,21 @@ class VideoChat3VisionLACTModel(VideoChat3VisionModel):
         }
         missing_memory_lact = missing_lact - query_hf_keys
         if self.config.memory_type == "linear":
-            # A linear-memory model may initialize from either the Base or a
-            # SwiGLU-LACT checkpoint. Always rebuild its complete private
-            # memory branch from the loaded attention weights so a mixture of
-            # old matching projections and new parameters cannot leak in.
-            self.reset_lact_parameters()
+            source_config = json.loads((Path(hf_path) / "config.json").read_text())
+            if source_config.get("vision_config", {}).get("memory_type") == "linear":
+                # A compatible trained Linear checkpoint is a transfer/resume
+                # source. Preserve every loaded FW projection and gate.
+                if missing_memory_lact:
+                    raise RuntimeError(
+                        "Incomplete Linear LACT checkpoint: "
+                        f"missing={sorted(missing_memory_lact)}"
+                    )
+                if missing_lact and self.chunk_query is not None:
+                    nn.init.trunc_normal_(self.chunk_query, std=0.02)
+            else:
+                # Base/SwiGLU initialization still rebuilds the entire branch
+                # from attention, avoiding a mixture of old and new weights.
+                self.reset_lact_parameters()
             missing_base = missing - lact_hf_keys
             if strict and missing_base:
                 raise RuntimeError(
