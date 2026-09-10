@@ -36,7 +36,7 @@ Sources: [VideoChat3 paper](https://arxiv.org/abs/2607.14935), [Academic2M](http
 
 ## Current Decision
 
-The LLaVA 0–30s adaptation run v35 stopped after its loss plateau; retain `hf-800` for TimeLens initialization. The user selected v36 **multi_stage_video_last**: progressively reduce retained chunks while preserving the parallel Linear16+Delta encoder, no query tokens, and joint ViT/FW/projector training. Use physical GPUs 4–7. See `exp_results.md` for live status. LongVid and the retired Stage 3 release remain excluded; NExT-QA remains a benchmark/control.
+The current machine runs v37 on physical GPUs 4–7: the v35 LLaVA 0–30s adaptation recipe from fresh initialization, with an automatic stop and final `hf-800` save at step 800. Preserve v35's 5,158-step cosine schedule and 154-step warmup; only the stopping point changes. Historical v35 stopped after its loss plateau and supplied its trained `hf-800` to v36 **multi_stage_video_last** TimeLens training. The fresh v37 run does not reuse those trained weights. See `exp_results.md` for status and the versioned launcher. LongVid and the retired Stage 3 release remain excluded; NExT-QA remains a benchmark/control.
 
 Short-video QA supplies broader visual-semantic supervision while reducing the recurrent horizon. With 64 sampled frames and four frames per chunk, each layer performs 15 effective updates; the actual TimeLens random-12,624 recipe averages 57.47 updates per training occurrence (median 55, maximum 111). Ordinary VQA recovery and a measurable benefit from persistent FW state are separate acceptance criteria. Use native generation/scoring and matched Base controls; no teacher-forced evaluation.
 

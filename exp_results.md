@@ -2,7 +2,7 @@
 
 ## v37 - v35 Recipe with Automatic Stop at Step 800
 
-**Status:** Prepared for launch on physical GPUs 4–7; stop automatically after saving `hf-800`. No native evaluation requested.
+**Status:** Running on public W&B on physical GPUs 4–7, launched 2026-09-10; validated through step 3/800. Stops automatically after saving `hf-800`. No native evaluation requested.
 
 - Objective: reproduce v35's short-video adaptation recipe through step 800 and retain its final HF checkpoint for later training.
 - Initialization: fresh `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, seed 42; pinned Base weights unchanged, attention-share-initialized Linear16 private Q/K/V/O, zero linear gates/state. The fresh export is Linear16 rather than the historical SwiGLU container; both training recipes rebuild the Linear memory branch during HF initialization. Historical beta initialization is not claimed bitwise identical.
@@ -13,7 +13,9 @@
 - Hardware/batch/sequence: four H100s, `CUDA_VISIBLE_DEVICES=4,5,6,7`; global batch 16, four accumulations/rank, 8K sample/pack limits; 2 FPS, 64-frame min/max bounded by source frames, 224px frame cap, 3,211,264 total pixels.
 - W&B: [v37](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-3drope-parallel-alltokens-vitfwproj-llava0to30-qa495013-4xh100-gb16-f64-s8k-lr2e5-v37), public API using the user-provided login stored outside Git.
 - Launcher: `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_ALLTOKENS_train_llava_0_30s_v37.sh`.
-- Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-alltokens-vitfwproj-llava0to30-qa495013-4xh100-gb16-f64-s8k-lr2e5-v37/<timestamp>/hf-800`.
+- Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-alltokens-vitfwproj-llava0to30-qa495013-4xh100-gb16-f64-s8k-lr2e5-v37/20260910193237/hf-800`.
+
+Startup validation: 495,013 rows / 82,518 packs match v35; ViT/FW/projector trainable, LM frozen. Steps 1–3 global CE `1.08372068/1.04959106/1.00614452`, finite pre-clip norms `6.33013/7.97234/6.61381`, and common group LRs `0/1.298701e-7/2.597403e-7`. Maximum observed rank-0 allocation/reservation `22.44/23.99 GB`; stable steps approximately 36 seconds, initial remaining ETA approximately eight hours. No OOM, skipped update, or placeholder mismatch. Two scheduler tests verify the entire first-800-step v35 LR trajectory and resumed scheduler continuity; config validation confirms total step 800, LR horizon 5,158, warmup 154, and HF/DCP interval 200. Public W&B confirms the run is active. Native log: run-root `torchrun_logs/training_20260910_193224_lucia6750000000.log`; detached session `vc3-v37-20260910`; executable launch commit `91499b2`.
 
 ## Rules
 
