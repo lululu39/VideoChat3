@@ -84,5 +84,5 @@ echo "Torchrun: ${TORCHRUN_BIN}"
   --rdzv-backend=c10d \
   --rdzv-endpoint="${MASTER_ADDR}:${MASTER_PORT}" \
   --rdzv-id="${RDZV_ID}" \
-  xtuner/v1/train/cli/sft.py \
+  "${XTUNER_SFT_ENTRYPOINT:-xtuner/v1/train/cli/sft.py}" \
   --config "${CONFIG_PATH}" 2>&1 | tee -a "${log_file}"

@@ -31,7 +31,7 @@ class VideoChat3VisionConfig(BaseModel):
     merge_kernel_size: list[int] = [2, 2]  # 新增
     temporal_patch_size: int = 1  # 从2改为1
     temporal_merge_size: int = 4  # 新增
-    macro_temporal_compression_factor: Literal[1, 2, 4, 8] = 1
+    macro_temporal_compression_factor: Literal[1, 2, 4, 8, 16, 32, 64, 128] = 1
     macro_temporal_compression_mode: Literal[
         "auto",
         "mean",

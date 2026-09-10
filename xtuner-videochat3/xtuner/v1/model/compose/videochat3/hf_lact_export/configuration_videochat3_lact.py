@@ -94,9 +94,9 @@ class VideoChat3LACTVisionConfig(VideoChat3VisionConfig):
             raise ValueError(
                 "lact_chunk_query_mode requires lact_chunk_query=True"
             )
-        if macro_temporal_compression_factor not in (1, 2, 4, 8):
+        if macro_temporal_compression_factor not in (1, 2, 4, 8, 16, 32, 64, 128):
             raise ValueError(
-                "macro_temporal_compression_factor must be one of (1, 2, 4, 8), "
+                "macro_temporal_compression_factor must be one of (1, 2, 4, 8, 16, 32, 64, 128), "
                 f"got {macro_temporal_compression_factor}"
             )
         if macro_temporal_compression_mode not in (

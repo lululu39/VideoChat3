@@ -28,6 +28,54 @@ OFFICIAL_CHECKPOINT = Path(
 )
 
 
+@pytest.mark.parametrize("factor,mode", [(16, "select_last"), (128, "video_last")])
+@pytest.mark.skipif(not (OFFICIAL_CHECKPOINT / "modeling_videochat3.py").is_file(),
+                    reason="Official VideoChat3 remote code is unavailable")
+def test_curriculum_stage_export_is_native_and_keeps_parameters(tmp_path, factor, mode):
+    from xtuner.v1.datasets.videochat3_curriculum import ChunkStage
+    from xtuner.v1.train.videochat3_curriculum import VideoChat3CurriculumTrainer
+    cfg = _tiny_model_config()
+    cfg.vision_config.memory_type = "linear"
+    cfg.vision_config.inner_optim = "delta"
+    cfg.vision_config.fw_num_heads = 4
+    cfg.vision_config.lact_chunk_query = False
+    cfg.vision_config.clip_state_grad_ratio = False
+    model = cfg.build()
+    before = {k: v.clone() for k, v in model.state_dict().items()}
+    fake = SimpleNamespace(_trainer_cfg=SimpleNamespace(model_cfg=cfg),
+        _engine=SimpleNamespace(model=model), _active_video_stage=None, rank=0,
+        logger=SimpleNamespace(info=lambda message: None), exp_dir=tmp_path, total_step=16)
+    VideoChat3CurriculumTrainer._activate_video_stage(fake, ChunkStage(8, 14, 16, factor, mode))
+    for key, tensor in model.state_dict().items():
+        torch.testing.assert_close(tensor, before[key], rtol=0, atol=0)
+    base_path, save_path = tmp_path / "base", tmp_path / "saved"
+    base_path.mkdir()
+    for filename in ("configuration_videochat3.py", "modeling_videochat3.py"):
+        shutil.copy2(OFFICIAL_CHECKPOINT / filename, base_path / filename)
+    _write_tiny_base_config(base_path, cfg)
+    model.set_hf(base_path)
+    model.save_hf(save_path, save_dtype=torch.bfloat16)
+    model.to(torch.bfloat16).float()
+    processor = json.loads((save_path / "processor_config.json").read_text())
+    assert processor["macro_temporal_compression_factor"] == factor
+    assert processor["macro_temporal_compression_mode"] == mode
+    hf, info = AutoModelForCausalLM.from_pretrained(save_path, trust_remote_code=True,
+                                                   dtype=torch.float32, output_loading_info=True)
+    assert not info["missing_keys"] and not info["unexpected_keys"] and not info["mismatched_keys"]
+    assert hf.config.vision_config.macro_temporal_compression_factor == factor
+    assert hf.config.vision_config.macro_temporal_compression_mode == mode
+    assert hf.model.vision_tower.chunk_query is None
+    for block in hf.model.vision_tower.encoder.blocks:
+        block.attn_impl = "sdpa"
+    pixels = torch.randn(368, 12)
+    grids = torch.tensor([[80, 2, 2], [12, 2, 2]], dtype=torch.int32)
+    expected = model.vision_tower(pixels, grids)
+    actual = hf.model.vision_tower(pixels, grids)
+    assert len(actual) == (2 if mode == "video_last" else 3)
+    for a, b in zip(actual, expected, strict=True):
+        torch.testing.assert_close(a, b, rtol=2e-5, atol=2e-6)
+
+
 def _tiny_model_config():
     vision_config = VideoChat3LACTVisionConfig(
         hidden_size=16,

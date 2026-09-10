@@ -192,7 +192,7 @@ def _compress_chunk_outputs(
     mode: str = "auto",
 ) -> list[torch.Tensor]:
     """Compress final-layer chunk outputs without crossing videos."""
-    if factor not in (1, 2, 4, 8):
+    if factor not in (1, 2, 4, 8, 16, 32, 64, 128):
         raise ValueError(f"Unsupported macro temporal compression factor: {factor}")
     if mode == "auto":
         mode = "select_last"

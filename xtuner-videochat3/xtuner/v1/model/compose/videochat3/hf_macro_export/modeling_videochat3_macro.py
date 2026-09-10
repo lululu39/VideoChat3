@@ -78,7 +78,7 @@ def _compress_chunk_outputs(
     factor: int,
     mode: str,
 ) -> list[torch.Tensor]:
-    if factor not in (1, 2, 4, 8):
+    if factor not in (1, 2, 4, 8, 16, 32, 64, 128):
         raise ValueError(f"Unsupported macro temporal compression factor: {factor}")
     if sum(video_clip_counts) != len(chunk_outputs):
         raise ValueError(

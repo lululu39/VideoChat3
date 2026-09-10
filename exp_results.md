@@ -1185,7 +1185,7 @@ Stop result: last CE/pre-clip norm `0.28731191/4.61231661`; last-20 mean CE `0.2
 
 ## v35 - LLaVA Short-Video Adaptation with All Original Visual Tokens
 
-**Status:** Running on public W&B, launched 2026-09-09; startup validated through step 4/5,158. Use the entire prepared QA training split for one epoch, with optional user-directed early stopping. There is no 200-step training cap and no automatic loss-based stop.
+**Status:** Stopped by the user after step 816/5,158 on 2026-09-10 to transfer the retained `hf-800` to TimeLens. Do not resume v35. Training initially improved, then plateaued; no native evaluation has been performed.
 
 - Objective: adapt LACT on short-video VQA before continuing on TimeLens; retain the original video-to-LM token interface. A declining training loss is an adaptation signal, not evidence of native VQA or memory improvement.
 - Initialization: `/mnt/localssd/VideoChat3/VideoChat3-4B-LACT-init`, seed 42, attention-share-initialized Linear16 private Q/K/V/O, zero recurrent state and linear gates. Do not load any query checkpoint or previous smoke weights.
@@ -1200,3 +1200,40 @@ Stop result: last CE/pre-clip norm `0.28731191/4.61231661`; last-20 mean CE `0.2
 - Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-alltokens-vitfwproj-llava0to30-qa495013-4xh100-gb16-f64-s8k-lr2e5-v35/20260909192723/hf-200` first periodic export; `hf-5158` on normal full completion. Save a usable adapted checkpoint before a later manual stop and TimeLens transfer; use a new TimeLens run/optimizer/dataloader with the same no-query/all-token architecture.
 
 Startup validation: actual loading/packing reproduces all 495,013 conversations and 82,518 packs. FSDP reports ViT/FW/projector trainable and LM frozen; no-query/all-token processor settings are active. Steps 1–4 global CE is `1.08372068/1.04959106/1.00627232/1.07294798`, with finite global pre-clip norms `6.36375523/7.99876451/18.74691963/6.57336092`; no OOM or skipped update. Maximum rank allocated/reserved memory is `22.44/23.99 GB`; steps 2–4 take `35.98/35.63/35.68s`, implying roughly 51 hours for a full epoch at the initial rate. Warmup LR is `0/1.298701e-7/2.597403e-7/3.896104e-7`. The W&B API confirms `running` with uploaded loss/gradient metrics, using the existing public `yibozhong657 (LVSM-Experiment)` account. Native log: `torchrun_logs/training_20260909_192709_datava270000004.log`; detached session: `vc3-v35-20260909`; executable launch commit: `580424d`.
+
+Stop result: CE means for steps 1–50 / 101–200 / 601–800 are `0.988438/0.750523/0.747624`; last CE/pre-clip norm is `0.77417761/5.39270067`. Retained transfer checkpoint: run root `20260909192723/hf-800` (three indexed safetensors shards verified); later unsaved updates are discarded. All v35 training processes exited. W&B records the intentional transfer/plateau stop.
+
+`checkpoint_inspection_hf800.json` compares compatible tensors against the retained share-initialized checkpoint: gate RMS/mean-absolute/max-absolute is `4.2672e-4/3.3831e-4/2.2583e-3`; FW private/value relative deltas are `1.3826%/1.4581%`, original attention/MLP/other ViT deltas are `1.5371%/0.7502%/0.0715%`, and projector delta is `2.2356%`. The 4B LM is bitwise unchanged. Linear runtime state has no trainable base matrix. The 27 beta tensors differ in shape from the retained SwiGLU initialization, so the report records their trained RMS without inventing a parameter delta against an incompatible reference.
+
+## v36 - TimeLens multi_stage_video_last after LLaVA Adaptation
+
+**Status:** Implementation and preflight passed; ready for the user-authorized launch on physical GPUs 4–7 after push.
+
+- Objective: progressively train the LM-facing interface from every chunk to only the final video chunk, yielding a native `video_last` checkpoint for comparison with historical direct-video-last experiments.
+- Initialization: v35 `20260909192723/hf-800`, retaining all trained ViT/FW/gate/projector tensors. Fresh TimeLens optimizer, scheduler, and dataloader; no query tokens.
+- Data: the previous TimeLens seed-42 random-half manifest, 12,624 grounding rows over 8,985 videos, under `/mnt/localssd/dataset/VideoChat3/TimeLens-100K/TimeLens100K_Visual_Random12624_VideoChat3.json`. Reuse one full-token packing/order for the entire epoch so reduced LM tokens do not change video exposure per optimizer step.
+- Curriculum: eight stages with step counts differing by at most one: all chunks, then stride 2/4/8/16/32/64 (retain each group's final chunk, including an incomplete tail), then per-video `video_last`. All input frames still traverse the full LACT encoder/state recurrence. Retained timestamp and placeholder blocks must match the retained visual features.
+- Trainable scope: original ViT, all Linear16 FW/gates, projector; LM frozen. Parallel Linear16+Delta, fast-Q/K 3D RoPE, group 1, inherited trained linear gates, no extra spatial selection/compression.
+- Optimizer/LR schedule: previous uniform AdamW `2e-5 -> 1e-6`, weight decay 0, one epoch, 3% warmup, one continuous cosine schedule and Adam state across all stages. No per-stage reset. Global gradient clip 1.0; no NS5/FW ratio clips.
+- Hardware/batch/sequence: physical GPUs 4–7, ordinary four-rank H100 FSDP, global batch 16; 2 FPS, 64–448 frames, 224px cap, total-pixel budget 14,680,064. Use 8K initial sample/packing length because the all-chunk stage cannot fit the old video-last 1K limit. CPU vision activation offload follows the prior joint-training video-last v29 memory recipe.
+- Checkpoints: HF and DCP at every stage boundary plus the 200-step interval; final HF config/processor must natively select `video_last`. Stage boundaries derive from the global restored optimizer step, including resume.
+- W&B: [v36 multi_stage_video_last](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-lact-l16-delta-parallel-3drope-multi_stage_video_last-timelens-r12624-hf800-4xh100-gb16-s8k-v36).
+- Expected artifact: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-parallel-3drope-multi_stage_video_last-timelens-r12624-hf800-4xh100-gb16-s8k-v36/<timestamp>/hf-<final-step>`.
+- Comparison: historical v29 direct video-last stopped without a checkpoint; other historical video-last results also differ in initialization/scope. A strict curriculum ablation would require a direct-video-last control starting from this same hf-800 with the same fixed packs and total steps; do not attribute all historical differences solely to the curriculum.
+
+Native preflight: 43,534,328 all-token input tokens, maximum 5,657 per row, 6,658 fixed packs, **417 optimizer steps**. The 12-step warmup and cosine scheduler span all 417 steps continuously. No row is removed by the 8K limit. The saved plan is `/mnt/localssd/dataset/VideoChat3/TimeLens-100K/packing_multi_stage_video_last.json`.
+
+| Stage | Optimizer steps | Retained outputs per video |
+| --- | --- | --- |
+| 1 | 1–53 | Every chunk |
+| 2 | 54–105 | Last chunk of each group of 2 |
+| 3 | 106–157 | Last chunk of each group of 4 |
+| 4 | 158–209 | Last chunk of each group of 8 |
+| 5 | 210–261 | Last chunk of each group of 16 |
+| 6 | 262–313 | Last chunk of each group of 32 |
+| 7 | 314–365 | Last chunk of each group of 64 |
+| 8 | 366–417 | Only the video's final chunk (`video_last`) |
+
+Implementation: `VideoChat3CurriculumTrainer` changes the output mode based on the completed global optimizer step and prunes timestamps/placeholders in the main process after data prefetch. It rebuilds LM positions, packed boundaries and shifted labels without changing vision inputs, supervised targets, sample order, optimizer moments, or LR schedule. Native HF exports contain the current compression mode/factor; DCP resume derives the next stage from the restored global step. Stage-boundary HF exports are retained alongside the 200/400-step exports; the last two DCP states are retained. Final expected export is `hf-417` with native `video_last` semantics.
+
+Validation: 37 curriculum/layout/HF-export tests pass, including exact native token/label/position equivalence for every stage, odd tail groups, video boundaries, CUDA/BF16 recurrent-output/gradient checks, and independent HF model/processor metadata for factor 16 and final video-last. An eight-step, four-GPU full-model smoke starting from hf-800 exercised all eight transitions with a single optimizer at constant `2e-5` (64 real TimeLens rows, repeated only for the smoke). CE is `0.3019/0.3098/0.3513/0.4032/0.3750/0.4205/0.4379/0.4135`; pre-clip norms are `10.389/7.950/6.131/3.687/2.856/4.445/1.794/1.418`, all finite. Native smoke artifacts: `/mnt/localssd/VideoChat3/validation/v36-multistage/`. Smoke weights were not saved or reused; the formal run restarts from the requested hf-800.

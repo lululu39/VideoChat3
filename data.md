@@ -36,7 +36,7 @@ Sources: [VideoChat3 paper](https://arxiv.org/abs/2607.14935), [Academic2M](http
 
 ## Current Decision
 
-Use the Academic + YouTube **0–30 second LLaVA-Video QA subsets** for architecture adaptation, then continue on TimeLens from the adapted checkpoint. The selected model uses v26's parallel Linear16+Delta and joint ViT/FW/projector scope, with **no query tokens and all original patch-merger outputs retained for the LM**. The user authorized v35 on the full QA training split with 200-step checkpoint intervals and discretionary early stopping; see `exp_results.md` for live status. LongVid and the retired Stage 3 release remain excluded; NExT-QA remains a benchmark/control.
+The LLaVA 0–30s adaptation run v35 stopped after its loss plateau; retain `hf-800` for TimeLens initialization. The user selected v36 **multi_stage_video_last**: progressively reduce retained chunks while preserving the parallel Linear16+Delta encoder, no query tokens, and joint ViT/FW/projector training. Use physical GPUs 4–7. See `exp_results.md` for live status. LongVid and the retired Stage 3 release remain excluded; NExT-QA remains a benchmark/control.
 
 Short-video QA supplies broader visual-semantic supervision while reducing the recurrent horizon. With 64 sampled frames and four frames per chunk, each layer performs 15 effective updates; the actual TimeLens random-12,624 recipe averages 57.47 updates per training occurrence (median 55, maximum 111). Ordinary VQA recovery and a measurable benefit from persistent FW state are separate acceptance criteria. Use native generation/scoring and matched Base controls; no teacher-forced evaluation.
 
@@ -119,6 +119,10 @@ The official snapshot is prepared at `/mnt/localssd/dataset/VideoChat3/TimeLens-
 - The default recipe matches TimeLens at 2 FPS, 64-448 frames, and a 14,680,064 total-pixel budget, while rounding frames to four for LACT. Every balanced sample fits the 8K context; mean/P95/max lengths are `3,454/5,305/5,662` tokens.
 - A real 498.9-second sample successfully decoded 448 frames and produced matching cache/runtime lengths of 4,766 tokens with 18 supervised answer tokens.
 - Use `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_FW_train_timelens.sh` after creating the next numbered experiment record and setting `WANDB_NAME`.
+
+## TimeLens Multi-Stage Training
+
+The active TimeLens training recipe is `xtuner-videochat3/training_scripts/stage3/VideoChat3_4B_LACT_multi_stage_video_last_timelens_v36.sh`. It uses the previous seed-42 random-half manifest (12,624 rows / 8,985 videos) and initializes from v35 `hf-800`. One epoch of fixed all-token 8K packing gives 6,658 packs / 417 optimizer steps at global batch 16. Stages all/2/4/8/16/32/64/video-last receive 53/52/52/52/52/52/52/52 steps. Every input frame still traverses LACT; only the LM-facing chunk outputs and matching timestamps/placeholders are removed. Tail groups retain their last chunk. Adam moments and the single cosine schedule continue across all stages; final `hf-417` exports native `video_last` model/processor metadata. Native benchmark evaluation remains separate from this training.
 
 ## Prepared TimeLens-Bench
 

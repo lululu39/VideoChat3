@@ -602,7 +602,7 @@ class VideoChat3TokenizeFunction(BaseMLLMTokenizeFunction):
         grid_t, grid_h, grid_w = (int(value) for value in grid_thw)
         if self.lact_chunk_query:
             return sum(self._chunk_query_counts((grid_t, grid_h, grid_w)))
-        if self.macro_temporal_compression_factor == 1:
+        if self.macro_temporal_compression_factor == 1 and self.macro_temporal_compression_mode != "video_last":
             return int(
                 self.video_processor.get_number_of_video_tokens(
                     grid_t,
@@ -858,7 +858,7 @@ class VideoChat3TokenizeFnConfig(BaseMLLMTokenizeFnConfig):
     video_sample_fps: Union[int, float] = 2 
     video_read_type: str | None = None
     video_frame_multiple: int = 1
-    macro_temporal_compression_factor: Literal[1, 2, 4, 8] = 1
+    macro_temporal_compression_factor: Literal[1, 2, 4, 8, 16, 32, 64, 128] = 1
     macro_temporal_compression_mode: Literal[
         "auto",
         "mean",
