@@ -2,7 +2,7 @@
 
 ## v38 - TimeLens Multi-Stage Transfer from v37 hf-200
 
-**Status:** User-stopped at step 266/417 on 2026-09-11; retain the latest complete `20260910214721/hf-261` (stage 5, `select_last`, factor 16). Do not resume training. Native TimeLens-Bench evaluation requested and being prepared on GPUs 4–7.
+**Status:** User-stopped at step 266/417 on 2026-09-11; retain the latest complete `20260910214721/hf-261` (stage 5, `select_last`, factor 16). Do not resume training. Native TimeLens-Bench evaluation is running on GPUs 4–7; scores pending.
 
 - Objective: apply the v36 `multi_stage_video_last` recipe to the user-selected v37 `hf-200`, ending with a native final-chunk-only checkpoint.
 - Initialization: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-alltokens-vitfwproj-llava0to30-qa495013-4xh100-gb16-f64-s8k-lr2e5-v37/20260910193237/hf-200`; all 923 tensors / three indexed shards verified. Preserve trained ViT/FW/beta/gates/projector; fresh optimizer, scheduler, dataloader, and W&B run.
@@ -24,6 +24,8 @@ Startup validation: actual 12,624 rows / 6,658 packs / 417 steps match the recip
 Stop diagnostics: all 266 pre-clip norms finite, mean/max `7.023/38.805`. Stage-5 first/last-10 mean global CE `0.37914/0.37960` is flat. Latest complete HF artifact is `20260910214721/hf-261` (923 tensors / three indexed shards verified); later stage-6 updates are unsaved. Against the actual v37 `hf-200` initialization, `20260910214721/checkpoint_inspection_hf261.json` reports gate RMS/max `2.85858e-4/1.17493e-3`; FW private/value/beta relative deltas `0.7006%/0.7888%/1.1628%`, original attention/MLP/other-ViT `0.7954%/0.3825%/0.0323%`, projector `1.1650%`. LM and memory norms remain bitwise unchanged.
 
 Evaluation setup: `scripts/eval_videochat3_v38_hf261_timelens_bench.sh` and `vlmevalkit-videochat3/configs/videochat3_v38_hf261_timelens_bench.json`; native generation/scoring on all 9,404 queries, same v26/Base prompt and decoding (64 new-token cap), 2 FPS, up to 448 frames, 224px / 14,680,064 total-pixel budget. Preserve checkpoint-native factor-16 chunk selection in both model and processor; this is not a `video_last` evaluation. Pinned benchmark revision `5fc78c4b401b2dadf7a3a4355d51d566ff28e0c9`; this host initially had annotations only, so official videos are being downloaded and validated. Output root `/mnt/localssd/VideoChat3/eval/videochat3-v38-hf261-timelens-bench`. Report official R1@0.3/0.5/0.7 and mIoU with fixed Base/v26 comparisons; no teacher-forced metrics or evaluation W&B uploads.
+
+Evaluation startup: all 4,279 official MP4s / 9,404 queries validated (75,096,716,925 video bytes); preparation summary at dataset-root `timelens_bench_prepare_summary.json`. Local AutoConfig/AutoProcessor both load factor 16 / `select_last`; generation options and all three dataset configs exactly match v26. Four ranks map exclusively to physical GPUs 4/5/6/7, with unrelated jobs untouched. All four ranks have produced native timestamp answers; 180 Charades predictions were verified on disk at startup, with no OOM or failed generation. Artifact directory `/mnt/localssd/VideoChat3/eval/videochat3-v38-hf261-timelens-bench/VideoChat3-4B-LACT-v38-hf261/T20260911_G8bd175f0`; detached session `vc3-v38-hf261-bench`, log `/mnt/localssd/VideoChat3/setup/v38_hf261_bench.log`. Training W&B state is `killed` with the explicit user-stop / retained-checkpoint note.
 
 ## v37 - v35 Recipe with Automatic Stop at Step 800
 
