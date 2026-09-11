@@ -2,7 +2,7 @@
 
 ## v38 - TimeLens Multi-Stage Transfer from v37 hf-200
 
-**Status:** Running on physical GPUs 4–7; the first two optimizer steps completed with finite loss/gradients. No native evaluation requested.
+**Status:** User-stopped at step 266/417 on 2026-09-11; retain the latest complete `20260910214721/hf-261` (stage 5, `select_last`, factor 16). Do not resume training. Native TimeLens-Bench evaluation requested and being prepared on GPUs 4–7.
 
 - Objective: apply the v36 `multi_stage_video_last` recipe to the user-selected v37 `hf-200`, ending with a native final-chunk-only checkpoint.
 - Initialization: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-alltokens-vitfwproj-llava0to30-qa495013-4xh100-gb16-f64-s8k-lr2e5-v37/20260910193237/hf-200`; all 923 tensors / three indexed shards verified. Preserve trained ViT/FW/beta/gates/projector; fresh optimizer, scheduler, dataloader, and W&B run.
@@ -20,6 +20,10 @@ Transfer correction: code inspection found the previous native Linear `from_hf` 
 Transfer validation: `v37/20260910193237/v38_transfer_loading_validation.json` verifies all 519 native vision tensors exactly equal the selected HF source after FP32 loading, including all FW/beta/gates and original ViT. All 31,104 trained gate elements are retained (RMS `1.79779e-4`).
 
 Startup validation: actual 12,624 rows / 6,658 packs / 417 steps match the recipe; stage 1 spans steps 1–53. Steps 1–2 global CE `0.246578/0.282748`, finite pre-clip norms `11.4631/11.9502`, and common ViT/FW/projector LRs `0/1.666667e-6`. Rank-0 peak allocation/reservation `19.91/21.09 GB`; step 2 compute time `55.09s`. No OOM or placeholder mismatch; decoder emitted H.264/seek warnings, but both optimizer steps completed. Public W&B reports `running`. Launch commit `b4d8f76`; detached session `vc3-v38-20260910`; native log run-root `torchrun_logs/training_20260910_214708_lucia6750000000.log`. Five focused loader/curriculum-export regression tests passed.
+
+Stop diagnostics: all 266 pre-clip norms finite, mean/max `7.023/38.805`. Stage-5 first/last-10 mean global CE `0.37914/0.37960` is flat. Latest complete HF artifact is `20260910214721/hf-261` (923 tensors / three indexed shards verified); later stage-6 updates are unsaved. Against the actual v37 `hf-200` initialization, `20260910214721/checkpoint_inspection_hf261.json` reports gate RMS/max `2.85858e-4/1.17493e-3`; FW private/value/beta relative deltas `0.7006%/0.7888%/1.1628%`, original attention/MLP/other-ViT `0.7954%/0.3825%/0.0323%`, projector `1.1650%`. LM and memory norms remain bitwise unchanged.
+
+Evaluation setup: `scripts/eval_videochat3_v38_hf261_timelens_bench.sh` and `vlmevalkit-videochat3/configs/videochat3_v38_hf261_timelens_bench.json`; native generation/scoring on all 9,404 queries, same v26/Base prompt and decoding (64 new-token cap), 2 FPS, up to 448 frames, 224px / 14,680,064 total-pixel budget. Preserve checkpoint-native factor-16 chunk selection in both model and processor; this is not a `video_last` evaluation. Pinned benchmark revision `5fc78c4b401b2dadf7a3a4355d51d566ff28e0c9`; this host initially had annotations only, so official videos are being downloaded and validated. Output root `/mnt/localssd/VideoChat3/eval/videochat3-v38-hf261-timelens-bench`. Report official R1@0.3/0.5/0.7 and mIoU with fixed Base/v26 comparisons; no teacher-forced metrics or evaluation W&B uploads.
 
 ## v37 - v35 Recipe with Automatic Stop at Step 800
 
