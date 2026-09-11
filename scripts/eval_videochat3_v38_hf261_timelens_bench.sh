@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 PROJECT_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-export CUDA_VISIBLE_DEVICES=4,5,6,7
+export CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7
 export TIMELENS_BENCH_ROOT=/mnt/localssd/dataset/VideoChat3/TimeLens-Bench
 export LMUData=/mnt/localssd/dataset/VLMEvalKit/LMUData
 export HF_HOME=/mnt/localssd/dataset/VLMEvalKit/hf_home
@@ -15,6 +15,6 @@ cd "${PROJECT_ROOT}"
 install -d "${OUTPUT_ROOT}"
 cd "${PROJECT_ROOT}/vlmevalkit-videochat3"
 # Do not use the historical exclusive watchdog: other GPU jobs are out of scope.
-exec "${PROJECT_ROOT}/.venv/bin/torchrun" --nproc-per-node=4 --master-port=41038 \
+exec "${PROJECT_ROOT}/.venv/bin/torchrun" --nproc-per-node=8 --master-port=41038 \
   run.py --config configs/videochat3_v38_hf261_timelens_bench.json \
   --work-dir "${OUTPUT_ROOT}" --reuse

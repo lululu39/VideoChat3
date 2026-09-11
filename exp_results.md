@@ -2,7 +2,7 @@
 
 ## v38 - TimeLens Multi-Stage Transfer from v37 hf-200
 
-**Status:** User-stopped at step 266/417 on 2026-09-11; retain the latest complete `20260910214721/hf-261` (stage 5, `select_last`, factor 16). Do not resume training. Native TimeLens-Bench evaluation is running on GPUs 4–7; scores pending.
+**Status:** User-stopped at step 266/417 on 2026-09-11; retain the latest complete `20260910214721/hf-261` (stage 5, `select_last`, factor 16). Do not resume training. Native TimeLens-Bench evaluation is restarting on GPUs 0–7 at the user's request, reusing the four-rank predictions; scores pending.
 
 - Objective: apply the v36 `multi_stage_video_last` recipe to the user-selected v37 `hf-200`, ending with a native final-chunk-only checkpoint.
 - Initialization: `/mnt/localssd/VideoChat3/training/vc3-lact-l16-delta-3drope-parallel-alltokens-vitfwproj-llava0to30-qa495013-4xh100-gb16-f64-s8k-lr2e5-v37/20260910193237/hf-200`; all 923 tensors / three indexed shards verified. Preserve trained ViT/FW/beta/gates/projector; fresh optimizer, scheduler, dataloader, and W&B run.
