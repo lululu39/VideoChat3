@@ -42,3 +42,6 @@ cd "$ROOT/vlmevalkit-videochat3"
     run.py --config "$OUT/eval_config.json" \
     --work-dir /mnt/localssd/VideoChat3/eval/videochat3-tas-v39-timelens-bench --reuse \
     > "$OUT/eval.log" 2>&1
+"$ROOT/.venv/bin/python" "$ROOT/scripts/summarize_videochat3_tas_eval.py" \
+    --root /mnt/localssd/VideoChat3/eval/videochat3-tas-v39-timelens-bench \
+    --output "$OUT/timelens_comparison.md"

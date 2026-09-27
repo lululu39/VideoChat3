@@ -107,12 +107,15 @@ def test_video_isolation_and_time_content(hf):
     assert not torch.allclose(single, changed)
 
 
-def test_processor_true_times_and_final_slot_count(hf):
+@pytest.mark.parametrize("with_duration", [True, False])
+def test_processor_true_times_and_final_slot_count(hf, with_duration):
     root, _ = hf
     processor = AutoProcessor.from_pretrained(root, trust_remote_code=True)
     video = np.zeros((8, 28, 28, 3), dtype=np.uint8)
     metadata = dict(total_num_frames=100, fps=10., duration=10., width=28, height=28,
                     frames_indices=[0, 2, 5, 9, 18, 40, 70, 99], video_backend="decord")
+    if not with_duration:
+        metadata.pop("duration")
     inputs = processor(text="<|vision_start|><|video_pad|><|vision_end|> Question",
                        videos=[video], video_metadata=[metadata], do_sample_frames=False,
                        size={"shortest_edge": 784, "longest_edge": 784}, return_tensors="pt")

@@ -50,7 +50,10 @@ class VideoChat3TASProcessor(VideoChat3Processor):
                     stamps = list(meta.timestamps)
                     if len(stamps) != t:
                         raise ValueError(f"{len(stamps)} timestamps for {t} sampled frames")
-                    duration = float(meta.duration)
+                    # qwen-vl-utils' extracted-frame evaluation metadata may
+                    # omit duration; its frame count/FPS still defines it.
+                    duration = float(meta.duration if meta.duration is not None
+                                     else meta.total_num_frames / meta.fps)
                     if not np.isfinite(duration) or duration <= 0 or not np.isfinite(stamps).all():
                         raise ValueError("Invalid sampled times or media duration")
                     times.extend([[float(stamp), duration] for stamp in stamps])
