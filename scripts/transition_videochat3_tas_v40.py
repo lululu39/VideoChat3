@@ -78,6 +78,11 @@ def main():
     if (args.output/'training_config.json').exists():
         raise FileExistsError('v40 already has a training configuration; refusing duplicate launch')
     env = os.environ.copy()
+    # wandb.Api starts a local service and publishes its IPC token in the
+    # parent's environment. The detached trainer must own a new service;
+    # this short-lived coordinator's socket disappears when it exits.
+    env.pop('_WANDB_SERVICE', None)
+    env.pop('WANDB_SERVICE', None)
     env['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
     env['TAS_OUTPUT'] = str(args.output)
     with (args.output/'pipeline.log').open('a') as f:

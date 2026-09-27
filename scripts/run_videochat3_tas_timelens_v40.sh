@@ -4,6 +4,7 @@ ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1,2,3,4,5,6,7}"
 export OMP_NUM_THREADS=4 TOKENIZERS_PARALLELISM=false WANDB_BASE_URL=https://api.wandb.ai
+unset _WANDB_SERVICE WANDB_SERVICE
 export PYTHONPATH="$ROOT/scripts:$ROOT/vlmevalkit-videochat3${PYTHONPATH:+:$PYTHONPATH}"
 NAME=vc3-tas-lvsm-chunkstate-time-vitproj-timelens-r12624-v29aligned-8xh100-gb16packs-v40
 OUT="${TAS_OUTPUT:-/mnt/localssd/VideoChat3/training/$NAME}"
