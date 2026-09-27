@@ -26,14 +26,18 @@ from xtuner.v1.model.compose.videochat3.hf_tas_export import prepare_tas_assets,
 
 
 class TimeLensDataset(Dataset):
-    def __init__(self, manifest, checkpoint, max_frames=448, limit=None):
+    def __init__(self, manifest, checkpoint, max_frames=448, limit=None, native_template=False):
         self.spec = next(iter(json.loads(Path(manifest).read_text()).values()))
         self.rows = [json.loads(line) for line in Path(self.spec["anno_path"]).read_text().splitlines()]
         if limit is not None:
             self.rows = self.rows[:limit]
         self.processor = AutoProcessor.from_pretrained(checkpoint, trust_remote_code=True)
         self.max_frames = max_frames
+        self.native_template = native_template
         self.processor.video_processor.video_max_total_pixels = 14680064
+        ending = "<|im_end|>" if native_template else "<|im_end|>\n"
+        self.answer_lengths = [len(self.processor.tokenizer.encode(
+            row["messages"][1]["content"]+ending, add_special_tokens=False)) for row in self.rows]
 
     def __len__(self):
         return len(self.rows)
@@ -61,6 +65,25 @@ class TimeLensDataset(Dataset):
                                 do_sample_frames=False, return_tensors="pt",
                                 size={"shortest_edge": 784, "longest_edge": 50176})
         answer = row["messages"][1]["content"]
+        if self.native_template:
+            from xtuner.v1.data_proto.messages import ChatMessages
+            from xtuner.v1.data_proto.templates import CHAT_TEMPLATE_MAP
+            n = int((inputs["input_ids"] == self.processor.video_token_id).sum())
+            block = self.processor.vision_start_token + self.processor.video_token*n + self.processor.vision_end_token
+            original_question = next(x["text"] for x in content if x["type"] == "text")
+            messages = ChatMessages(messages=[
+                {"role": "user", "content": original_question.replace("<VIDEO_CONTEXT>", block)},
+                {"role": "assistant", "content": answer},
+            ])
+            tokenized = messages.tokenize(self.processor.tokenizer, CHAT_TEMPLATE_MAP["videochat3"])
+            inputs["input_ids"] = torch.tensor([tokenized["input_ids"]])
+            inputs["labels"] = torch.tensor([tokenized["labels"]])
+            inputs["attention_mask"] = torch.ones_like(inputs["input_ids"])
+            assert int((inputs["labels"] != -100).sum()) == self.answer_lengths[index]
+            inputs["sample_id"] = row["id"]
+            if inputs["input_ids"].shape[-1] > 4096:
+                raise ValueError("Expanded TAS sequence exceeds 4K; never truncate the reference sample")
+            return dict(inputs)
         suffix = self.processor.tokenizer.encode(answer+"<|im_end|>\n", add_special_tokens=False)
         suffix = torch.tensor([suffix], dtype=torch.long)
         prefix = inputs["input_ids"]
@@ -153,6 +176,8 @@ def main():
     p.add_argument("--no-save", action="store_true")
     p.add_argument("--wandb-name")
     p.add_argument("--resume", action="store_true")
+    p.add_argument("--reference-plan", type=Path,
+                   help="v19/v29 exact pack/step plan; enables beta2=.95, native labels and square loss")
     args = p.parse_args()
     rank, local, world = (int(os.environ.get(k, d)) for k, d in (("RANK", "0"), ("LOCAL_RANK", "0"), ("WORLD_SIZE", "1")))
     torch.cuda.set_device(local)
@@ -162,6 +187,11 @@ def main():
     random.seed(args.seed); np.random.seed(args.seed); torch.manual_seed(args.seed)
     assert args.global_batch % world == 0
     accumulation = args.global_batch//world
+    plan = json.loads(args.reference_plan.read_text()) if args.reference_plan else None
+    if plan:
+        assert plan["world"] == world and plan["global_packs"] == args.global_batch
+        assert plan["seed"] == args.seed, "Reference sampler seed differs"
+        assert args.limit is None, "A subset would invalidate the reference plan"
     if rank == 0:
         args.output.mkdir(parents=True, exist_ok=True)
     if world > 1:
@@ -175,14 +205,25 @@ def main():
             param.data = param.data.float()
     model.train()
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
-                                 lr=args.lr, weight_decay=0., betas=(.9, .999), eps=1e-8, fused=True)
-    dataset = TimeLensDataset(args.manifest, args.checkpoint, args.max_frames, args.limit)
-    sampler = DistributedSampler(dataset, num_replicas=world, rank=rank, seed=args.seed, shuffle=True, drop_last=False)
+                                 lr=args.lr, weight_decay=0., betas=(.9, .95 if plan else .999),
+                                 eps=1e-8, fused=False if plan else True, foreach=False if plan else None)
+    dataset = TimeLensDataset(args.manifest, args.checkpoint, args.max_frames, args.limit,
+                              native_template=bool(plan))
+    micro_plan = None
+    if plan:
+        micro_plan = [(step, index, i == len(rows[rank])-1)
+                      for step, rows in enumerate(plan["steps"])
+                      for i, index in enumerate(rows[rank])]
+        sampler = [index for _, index, _ in micro_plan]
+        denominators = [sum(math.sqrt(dataset.answer_lengths[i]) for rows in step for i in rows)
+                        for step in plan["steps"]]
+    else:
+        sampler = DistributedSampler(dataset, num_replicas=world, rank=rank, seed=args.seed, shuffle=True, drop_last=False)
     loader = DataLoader(dataset, batch_size=1, sampler=sampler, num_workers=args.workers,
                         collate_fn=single_collate, pin_memory=True,
                         persistent_workers=args.workers > 0)
-    total_steps = math.ceil(len(loader)/accumulation)
-    warmup = max(1, math.ceil(total_steps*args.warmup_ratio))
+    total_steps = plan["total_steps"] if plan else math.ceil(len(loader)/accumulation)
+    warmup = int(total_steps*args.warmup_ratio) if plan else max(1, math.ceil(total_steps*args.warmup_ratio))
     first_step = 0
     if args.resume:
         saved = torch.load(args.output/"resume.pt", map_location="cpu", weights_only=False)
@@ -199,10 +240,17 @@ def main():
     run = None
     config = {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()}
     config.update(world_size=world, samples=len(dataset), total_steps=total_steps,
+                  optimizer_betas=[.9, .95 if plan else .999], optimizer_eps=1e-8,
+                  optimizer_foreach=False if plan else None, optimizer_fused=not bool(plan),
+                  loss_reduction="square" if plan else "sample", native_training_template=bool(plan),
+                  warmup_steps=warmup,
                   git_revision=subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip(),
                   manifest_sha256=hashlib.sha256(args.manifest.read_bytes()).hexdigest(),
                   uv_lock_sha256=hashlib.sha256((Path(__file__).resolve().parents[1]/"uv.lock").read_bytes()).hexdigest(),
                   trainable_parameters=sum(p.numel() for p in model.parameters() if p.requires_grad))
+    if plan:
+        config.update(reference_plan_sha256=hashlib.sha256(args.reference_plan.read_bytes()).hexdigest(),
+                      reference_pack_recipe={k: v for k, v in plan.items() if k not in ("steps", "rank_pack_order")})
     if rank == 0:
         (args.output/"training_config.json").write_text(json.dumps(config, indent=2)+"\n")
         print(json.dumps(config), flush=True)
@@ -223,7 +271,7 @@ def main():
     losses, terminal_gates = [], []
     completed = first_step
     for batch_idx, batch in enumerate(loader):
-        step = batch_idx//accumulation
+        step = micro_plan[batch_idx][0] if plan else batch_idx//accumulation
         if step < first_step:
             continue
         if args.max_steps is not None and step >= args.max_steps:
@@ -232,8 +280,14 @@ def main():
         batch = {k: v.to(local, non_blocking=True) if isinstance(v, torch.Tensor) else v for k, v in batch.items()}
         # Keep timestamps FP32 even while pixels use BF16 autocast.
         batch["pixel_values_videos"] = batch["pixel_values_videos"].to(torch.bfloat16)
-        last_micro = (batch_idx+1)%accumulation == 0 or batch_idx+1 == len(loader)
-        group_size = min(accumulation, len(loader)-step*accumulation)
+        last_micro = micro_plan[batch_idx][2] if plan else (batch_idx+1)%accumulation == 0 or batch_idx+1 == len(loader)
+        if plan:
+            answer_length = int((batch["labels"][:, 1:] != -100).sum())
+            assert answer_length == dataset.answer_lengths[micro_plan[batch_idx][1]]
+            loss_weight = world*math.sqrt(answer_length)/denominators[step]
+        else:
+            group_size = min(accumulation, len(loader)-step*accumulation)
+            loss_weight = 1/group_size
         with wrapped.no_sync() if world > 1 and not last_micro else nullcontext():
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 loss = wrapped(**batch)
@@ -243,8 +297,8 @@ def main():
             terminal_gates.append(torch.stack((gate.mean(), gate.min(), gate.max())))
             if not torch.isfinite(loss):
                 raise FloatingPointError(f"Nonfinite loss at {sample_id}")
-            (loss/group_size).backward()
-        losses.append(loss.detach())
+            (loss*loss_weight).backward()
+        losses.append(loss.detach()*loss_weight)
         if not last_micro:
             continue
         norm = nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1., error_if_nonfinite=True)
@@ -253,7 +307,7 @@ def main():
         for group in optimizer.param_groups:
             group["lr"] = lr
         optimizer.step(); optimizer.zero_grad(set_to_none=True)
-        avg = torch.stack(losses).mean()
+        avg = torch.stack(losses).sum()
         if world > 1:
             dist.all_reduce(avg); avg /= world
         peaks = torch.tensor([torch.cuda.max_memory_allocated()/1e9, torch.cuda.max_memory_reserved()/1e9], device=local)
@@ -262,6 +316,9 @@ def main():
         completed = step+1
         stats = dict(step=completed, loss=avg.item(), grad_norm=norm.item(), lr=lr,
                      seconds=time.monotonic()-start, max_allocated_gb=peaks[0].item(), max_reserved_gb=peaks[1].item())
+        if plan:
+            stats["runtime_info/global_examples_this_step"] = sum(map(len, plan["steps"][step]))
+            stats["runtime_info/global_examples_consumed"] = sum(sum(map(len, s)) for s in plan["steps"][:completed])
         gate_stats = torch.stack(terminal_gates).mean(0)
         if world > 1:
             dist.all_reduce(gate_stats); gate_stats /= world

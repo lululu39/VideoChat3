@@ -1,5 +1,18 @@
 # Experiment Results
 
+## v40 - TAS with the Exact v19/v29 Last-Chunk Training Recipe
+
+**Status:** Preparing the user-requested aligned fresh restart. v39 will stop after its durable step-100 checkpoint; its optimizer state is not used here.
+
+- Objective/initialization: same TAS architecture and untouched seed-42 `/mnt/localssd/VideoChat3/VideoChat3-4B-TAS-init` as v39; align the training recipe to v19/v29 without changing memory capacity or interface. Runtime state is one four-frame chunk of 1152-wide tokens, serial LVSM reads, shared WFL writer, assigned write, EMA .1, FP32 writer time metadata, terminal write included.
+- Data/batch: same 12,624 TimeLens random-half rows and v19 last-chunk token cache (SHA256 `adc81560e16778f45c847f413ebb18a9c13206cd0a3d0b4d21e0c06eb4463efb`). Reuse native `ExpandSoftPackDataset` (1K, extra buffer 20, chunk size 10000, seed 42) and `LengthGroupedSampler` for eight ranks. Reconstruct exactly 1,815 packs, rounded to 1,824 / **114 steps at 16 packs/update**; 12,687 sample occurrences including the same 63 padding repeats, 102–112 samples/update (mean 111.29). `reference_plan.json` records every rank/step sample ID. TAS sequences are processed individually with gradient accumulation; old 1K lengths determine sample grouping, not truncation of the longer TAS representation.
+- Labels/loss: native `ChatMessages` / `videochat3` template and label masks, including an ignored separator newline. Global `square` reduction: sample mean CE weighted by sqrt(answer-token count), normalized jointly across all samples/ranks in the update. DDP accumulation compensates its gradient averaging by world size; native packing and separate sample forwards have the same isolated-sample objective.
+- Optimizer/schedule: AdamW betas **(.9,.95)**, eps 1e-8, foreach False, fused False, weight decay 0, clip global norm 1. Common ViT/TAS/projector peak `2e-5`, floor `1e-6`, cosine over one 114-step epoch; **three warmup steps** using XTuner's floor rule. LM frozen; same v39 trainable scope (602.15M, including the documented unused final-MLP exclusion).
+- Hardware/stabilization: eight shared H100s; FP32 trainable parameters/optimizer, BF16 frozen LM/forward/state, exact BPTT, chunk and LM activation checkpointing. DDP execution differs from historical FSDP; sample groups, effective batch, loss weighting, Adam and LR schedule match. No FW ratio clip or NS5.
+- W&B: [v40](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-tas-lvsm-chunkstate-time-vitproj-timelens-r12624-v29aligned-8xh100-gb16packs-v40), standard `loss/total_loss` / `loss/reduced_llm_loss` fields and existing training group.
+- Launcher/artifacts: `scripts/run_videochat3_tas_timelens_v40.sh`; expected final `/mnt/localssd/VideoChat3/training/vc3-tas-lvsm-chunkstate-time-vitproj-timelens-r12624-v29aligned-8xh100-gb16packs-v40/hf-114`, checkpoint interval 20, atomic FP32 `resume.pt`.
+- Evaluation: automatically inspect final tensors and run the same native 9,404-question TimeLens-Bench protocol; artifacts `/mnt/localssd/VideoChat3/eval/videochat3-tas-v40-timelens-bench`, run-root `timelens_comparison.md`. Reuse fixed Base/v26 scores; no teacher-forced evaluation.
+
 ## v39 - LVSM Tokens-as-States, Final Memory Bank on TimeLens
 
 **Status:** Formal fresh run started on 2026-09-27; training is active on all eight shared H100s. Full checkpoint diagnostics and native TimeLens-Bench evaluation are queued automatically after training.
