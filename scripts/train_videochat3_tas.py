@@ -196,6 +196,7 @@ def main():
     accumulation = args.global_batch//world
     plan = json.loads(args.reference_plan.read_text()) if args.reference_plan else None
     if plan:
+        from tas_lastchunk_recipe import aligned_lr, square_weight
         assert plan["world"] == world and plan["global_packs"] == args.global_batch
         assert plan["seed"] == args.seed, "Reference sampler seed differs"
         assert args.limit is None, "A subset would invalidate the reference plan"
@@ -291,7 +292,7 @@ def main():
         if plan:
             answer_length = int((batch["labels"][:, 1:] != -100).sum())
             assert answer_length == dataset.answer_lengths[micro_plan[batch_idx][1]]
-            loss_weight = world*math.sqrt(answer_length)/denominators[step]
+            loss_weight = square_weight(answer_length, denominators[step], world)
         else:
             group_size = min(accumulation, len(loader)-step*accumulation)
             loss_weight = 1/group_size
@@ -311,6 +312,8 @@ def main():
         norm = nn.utils.clip_grad_norm_([p for p in model.parameters() if p.requires_grad], 1., error_if_nonfinite=True)
         factor = step/warmup if step < warmup else .5*(1+math.cos(math.pi*(step-warmup)/max(1, total_steps-warmup)))
         lr = args.lr*factor if step < warmup else args.min_lr+(args.lr-args.min_lr)*factor
+        if plan:
+            lr = aligned_lr(step, total_steps, args.lr, args.min_lr)
         for group in optimizer.param_groups:
             group["lr"] = lr
         optimizer.step(); optimizer.zero_grad(set_to_none=True)

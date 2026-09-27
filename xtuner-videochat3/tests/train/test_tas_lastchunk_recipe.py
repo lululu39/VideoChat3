@@ -8,7 +8,7 @@ import pytest
 import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[3]/"scripts"))
-from tas_lastchunk_recipe import build_plan, aligned_lr
+from tas_lastchunk_recipe import build_plan, aligned_lr, square_weight
 
 
 def test_exact_reference_plan():
@@ -38,8 +38,8 @@ def test_square_gradient_matches_xtuner_global_denominator():
     denominator = sum(math.sqrt(n) for n in lengths)
     # Simulate two DDP ranks with different microbatch counts: 1 versus 3.
     pieces = x.split(lengths)
-    local_a = pieces[0].mean()*math.sqrt(lengths[0])*2/denominator
-    local_b = sum(t.mean()*math.sqrt(n)*2/denominator for t,n in zip(pieces[1:], lengths[1:]))
+    local_a = pieces[0].mean()*square_weight(lengths[0],denominator,2)
+    local_b = sum(t.mean()*square_weight(n,denominator,2) for t,n in zip(pieces[1:], lengths[1:]))
     actual = (local_a+local_b)/2
     torch.testing.assert_close(actual, expected)
     torch.testing.assert_close(torch.autograd.grad(actual,x)[0],torch.autograd.grad(expected,x)[0])

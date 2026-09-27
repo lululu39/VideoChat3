@@ -71,3 +71,7 @@ def aligned_lr(step, total=114, peak=2e-5, floor=1e-6):
 
 def square_denominator(lengths):
     return torch.as_tensor(lengths, dtype=torch.float32).sqrt().sum()
+
+
+def square_weight(answer_length, global_denominator, world_size):
+    return world_size*math.sqrt(answer_length)/global_denominator
