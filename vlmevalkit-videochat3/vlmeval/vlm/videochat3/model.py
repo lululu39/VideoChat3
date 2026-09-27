@@ -212,12 +212,17 @@ class VideoChat3(Qwen3VLPromptMixin, BaseModel):
             **(video_kwargs or {}),
         )
         # print(inputs['input_ids'].shape)
+        # TAS writer uses real seconds; casting metadata to BF16 rounds long
+        # timestamps by seconds. Only visual floating-point features may cast.
+        tas_frame_times = inputs.get('tas_frame_times')
         try:
             inputs = inputs.to(self.model.device)
             if hasattr(self.model, 'dtype'):
                 inputs = inputs.to(self.model.dtype)
         except Exception:
             inputs = inputs.to('cuda')
+        if tas_frame_times is not None:
+            inputs['tas_frame_times'] = tas_frame_times.to(self.model.device, dtype=torch.float32)
 
         generated_ids = self.model.generate(
             **inputs,

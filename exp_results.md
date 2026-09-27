@@ -1,5 +1,21 @@
 # Experiment Results
 
+## v39 - LVSM Tokens-as-States, Final Memory Bank on TimeLens
+
+**Status:** Implementation and validation in progress; formal training not yet launched.
+
+- Objective: replace LACT fast-weight state and last-chunk readout with directly exported TAS token state; test native temporal grounding after fixed-capacity video compression.
+- Initialization: pinned Base `MCG-NJU/VideoChat3-4B` -> `/mnt/localssd/VideoChat3/VideoChat3-4B-TAS-init`, seed 42. Preserve every original ViT/LM/projector tensor; added TAS weights use independent normal(0, .02), learned state/slot identities share initial values with separate storage. No previous LACT weights are used.
+- Memory: LVSM `yibo_dev` revision `f34753d69aeb0dba495aef738a38d2ad6f43eeff`; serial read, one bank shared across all 27 layers, final-layer post-attention/pre-read WFL, assigned-write token-to-slot softmax plus mass normalization, SwiGLU memory MLP, sigmoid EMA initialized to .1. BF16 runtime state with FP32 norm/gate/blend; full BPTT, terminal write included, state reset per video. Width 1152; default active slots `4*Hpatch*Wpatch` (1024 at 224x224), learned table capacity 4096. One slot maps to one LM token by repeating that slot into the four input channels of the retained projector; no pooling between slots.
+- Time input: absolute-second and relative-progress Fourier features plus log duration, projected into writer K/V source features. Use actual sampled frame timestamps in FP32; no synthetic final-chunk timestamp or label-derived time input.
+- Data: v26's pinned TimeLens-100K visual seed-42 random-half manifest, 12,624 rows. Local decord, 2 FPS, 64–448 uniformly sampled frames rounded down to a multiple of four, 50,176 per-frame / 14,680,064 total-pixel budget.
+- Trainable scope: original ViT, TAS and original projector jointly; LM/head frozen. Canonical pre-read WFL makes the final ViT block's slow MLP/norm1 unused by a bank-only objective, so those retained tensors are frozen; the last memory reader is omitted. The pretrained final vision LayerNorm normalizes exported bank tokens.
+- Optimizer/LR schedule: v26-style AdamW, common `2e-5 -> 1e-6` cosine, 3% warmup, weight decay 0, global gradient clip 1, one epoch; no Muon/NS5 or FW-adjoint clipping.
+- Hardware/batch/sequence: eight shared H100s, explicitly authorized to coexist with existing processes. Ordinary DDP, one video/microbatch, two accumulations, global 16 **examples**; 4K sequence cap, chunk-level non-reentrant vision checkpointing and frozen-LM activation checkpointing. This differs from v26's global 16 **packs** and FSDP; expected 789 optimizer steps. FP32 trainable parameters/Adam state, BF16 frozen LM/forward.
+- Training W&B: [v39](https://wandb.ai/LVSM-Experiment/videochat3/runs/vc3-tas-lvsm-shared-chunkstate-time-vitproj-timelens-r12624-8xh100-gb16-v39).
+- Launcher: `scripts/run_videochat3_tas_timelens_v39.sh`. Expected final artifact `/mnt/localssd/VideoChat3/training/vc3-tas-lvsm-shared-chunkstate-time-vitproj-timelens-r12624-8xh100-gb16-v39/hf-789`; full FP32 trainable/optimizer resume at run-root `resume.pt`.
+- Evaluation: automatic post-training checkpoint diagnostics, then all 9,404 TimeLens-Bench questions with v26's native prompt/decoding, 2 FPS, f448, 224px/14,680,064 budget, 64-token generation cap. Output `/mnt/localssd/VideoChat3/eval/videochat3-tas-v39-timelens-bench`. Report official R1@0.3/0.5/0.7 and mIoU against fixed Base/v26; no teacher-forced evaluation.
+
 ## v38 - TimeLens Multi-Stage Transfer from v37 hf-200
 
 **Status:** User-stopped at step 266/417 on 2026-09-11; retain the latest complete `20260910214721/hf-261` (stage 5, `select_last`, factor 16). Do not resume training. Native TimeLens-Bench evaluation is running on GPUs 0–7 at the user's request, reusing 723 four-rank predictions; scores pending.
