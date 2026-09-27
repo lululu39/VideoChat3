@@ -126,6 +126,8 @@ class TASMemory(nn.Module):
         self.gate_weight = nn.Parameter(torch.zeros(1, 2 * dim))
         self.gate_bias = nn.Parameter(torch.full((1,), math.log(config.tas_ema_init / (1-config.tas_ema_init))))
         self.time_encoding = TimeEncoding(dim) if config.tas_time_encoding else None
+        self.collect_metrics = False
+        self.last_gate = None
         self.reset_parameters()
 
     def reset_parameters(self):
@@ -155,7 +157,9 @@ class TASMemory(nn.Module):
         u = self.write(self.write_norm(old) + identity, h.unsqueeze(0))
         candidate = u + self.mlp(self.mlp_norm(u))
         with torch.autocast(device_type=old.device.type, enabled=False):
-            gate = F.linear(torch.cat((rms(old).float(), rms(u).float()), -1),
+            gate = F.linear(torch.cat((rms(old.float()), rms(u.float())), -1),
                             self.gate_weight.float(), self.gate_bias.float()).sigmoid()
             updated = (1 - gate) * old.float() + gate * candidate.float()
+        if self.collect_metrics:
+            self.last_gate = gate.detach()
         return updated.to(old.dtype)

@@ -139,3 +139,28 @@ def test_full_model_generation_and_roundtrip(hf, tmp_path):
     loaded = AutoModelForCausalLM.from_pretrained(tmp_path, trust_remote_code=True).eval()
     with torch.no_grad():
         torch.testing.assert_close(logits, loaded(**inputs, logits_to_keep=1).logits)
+
+
+def test_training_loss_and_all_trainable_gradients(hf):
+    import sys
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3]/"scripts"))
+    from train_videochat3_tas import TrainingLoss
+    _, model = hf
+    model.freeze_for_tas_training()
+    model.train()
+    model.zero_grad(set_to_none=True)
+    ids = torch.tensor([[42]+[model.config.video_token_id]*16+[43, 44, 45]])
+    labels = torch.full_like(ids, -100); labels[:, -3:] = ids[:, -3:]
+    inputs = dict(input_ids=ids, attention_mask=torch.ones_like(ids),
+                  pixel_values_videos=torch.randn(8*4, 3*14**2),
+                  video_grid_thw=torch.tensor([[8, 2, 2]]), tas_frame_times=times(8))
+    expected = model(**inputs, labels=labels, use_cache=False).loss
+    actual = TrainingLoss(model)(labels=labels, **inputs)
+    torch.testing.assert_close(actual, expected)
+    actual.backward()
+    for name, parameter in model.named_parameters():
+        if parameter.requires_grad:
+            assert parameter.grad is not None, name
+            assert torch.isfinite(parameter.grad).all(), name
+        else:
+            assert parameter.grad is None, name

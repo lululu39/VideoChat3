@@ -98,6 +98,8 @@ def checkpoint_save(vlm, optimizer, step, args, source, stats):
     dest.mkdir(parents=True, exist_ok=False)
     prepare_tas_assets(source, dest)
     state = {k: v.detach().to(device="cpu", dtype=torch.bfloat16) for k, v in vlm.state_dict().items()}
+    if vlm.lm_head.weight is vlm.model.language_model.embed_tokens.weight:
+        state.pop("lm_head.weight", None)
     vlm.save_pretrained(dest, state_dict=state, max_shard_size="4GB")
     refresh_tas_code(dest)
     config_path = dest/"config.json"
@@ -151,6 +153,7 @@ def main():
     model = AutoModelForCausalLM.from_pretrained(args.checkpoint, trust_remote_code=True,
               dtype=torch.bfloat16, attn_implementation="flash_attention_2").to(local)
     model.freeze_for_tas_training()
+    model.model.vision_tower.tas.collect_metrics = True
     for param in model.parameters():
         if param.requires_grad:
             param.data = param.data.float()
@@ -199,7 +202,7 @@ def main():
                              id=args.wandb_name, resume="allow", config=config, dir=str(args.output))
     optimizer.zero_grad(set_to_none=True)
     start = time.monotonic()
-    losses = []
+    losses, terminal_gates = [], []
     completed = first_step
     for batch_idx, batch in enumerate(loader):
         step = batch_idx//accumulation
@@ -216,6 +219,10 @@ def main():
         with wrapped.no_sync() if world > 1 and not last_micro else nullcontext():
             with torch.autocast("cuda", dtype=torch.bfloat16):
                 loss = wrapped(**batch)
+            # Snapshot before backward checkpoint recomputation overwrites this
+            # diagnostic with an earlier chunk. Values refer to terminal writes.
+            gate = model.model.vision_tower.tas.last_gate
+            terminal_gates.append(torch.stack((gate.mean(), gate.min(), gate.max())))
             if not torch.isfinite(loss):
                 raise FloatingPointError(f"Nonfinite loss at {sample_id}")
             (loss/group_size).backward()
@@ -237,6 +244,12 @@ def main():
         completed = step+1
         stats = dict(step=completed, loss=avg.item(), grad_norm=norm.item(), lr=lr,
                      seconds=time.monotonic()-start, max_allocated_gb=peaks[0].item(), max_reserved_gb=peaks[1].item())
+        gate_stats = torch.stack(terminal_gates).mean(0)
+        if world > 1:
+            dist.all_reduce(gate_stats); gate_stats /= world
+        stats.update(terminal_gate_mean=gate_stats[0].item(),
+                     terminal_gate_sample_min_mean=gate_stats[1].item(),
+                     terminal_gate_sample_max_mean=gate_stats[2].item())
         if rank == 0:
             print(json.dumps(stats), flush=True)
             with (args.output/"metrics.jsonl").open("a") as f:
@@ -249,7 +262,7 @@ def main():
                 checkpoint_save(model, optimizer, completed, args, args.checkpoint, stats)
             if world > 1:
                 dist.barrier()
-        losses = []; start = time.monotonic()
+        losses, terminal_gates = [], []; start = time.monotonic()
     if rank == 0:
         (args.output/"training_complete.json").write_text(json.dumps(dict(completed_steps=completed, total_steps=total_steps)) + "\n")
         if run is not None:
