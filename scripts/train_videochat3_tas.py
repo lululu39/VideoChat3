@@ -78,6 +78,22 @@ def single_collate(items):
     return items[0]
 
 
+def wandb_metrics(stats):
+    """Use the existing XTuner dashboard keys; retain raw loss in local JSONL."""
+    payload = {k: v for k, v in stats.items() if k != "loss"}
+    payload.update({
+        "loss/total_loss": stats["loss"],
+        "loss/reduced_llm_loss": stats["loss"],
+        "time/step_time": stats["seconds"],
+        "memory/max_memory_GB": stats["max_allocated_gb"] * 1e9 / 1024**3,
+        "memory/reserved_memory_GB": stats["max_reserved_gb"] * 1e9 / 1024**3,
+        "lr_groups/vit": stats["lr"],
+        "lr_groups/tas": stats["lr"],
+        "lr_groups/projector": stats["lr"],
+    })
+    return payload
+
+
 class TrainingLoss(nn.Module):
     def __init__(self, vlm):
         super().__init__()
@@ -199,7 +215,9 @@ def main():
             else:
                 os.environ.pop("WANDB_API_KEY", None)
             run = wandb.init(entity="LVSM-Experiment", project="videochat3", name=args.wandb_name,
-                             id=args.wandb_name, resume="allow", config=config, dir=str(args.output))
+                             id=args.wandb_name, resume="allow", config=config, dir=str(args.output),
+                             group="videochat3-lact-stage3-ve", job_type="train",
+                             tags=["tas", "videochat3-4b", "timelens-100k-visual-random12624", "vit-tas-projector"])
     optimizer.zero_grad(set_to_none=True)
     start = time.monotonic()
     losses, terminal_gates = [], []
@@ -255,7 +273,7 @@ def main():
             with (args.output/"metrics.jsonl").open("a") as f:
                 f.write(json.dumps(stats)+"\n")
             if run is not None:
-                run.log(stats, step=completed)
+                run.log(wandb_metrics(stats), step=completed)
         save = not args.no_save and (completed%args.save_every == 0 or completed == total_steps or completed == args.max_steps)
         if save:
             if rank == 0:
