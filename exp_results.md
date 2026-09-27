@@ -2,7 +2,7 @@
 
 ## v39 - LVSM Tokens-as-States, Final Memory Bank on TimeLens
 
-**Status:** Implementation, eight-GPU training/resume smoke, HF export and native generation validation complete; ready for the formal fresh restart.
+**Status:** Formal fresh run started on 2026-09-27; training is active on all eight shared H100s. Full checkpoint diagnostics and native TimeLens-Bench evaluation are queued automatically after training.
 
 - Objective: replace LACT fast-weight state and last-chunk readout with directly exported TAS token state; test native temporal grounding after fixed-capacity video compression.
 - Initialization: pinned Base `MCG-NJU/VideoChat3-4B` -> `/mnt/localssd/VideoChat3/VideoChat3-4B-TAS-init`, seed 42. Preserve every original ViT/LM/projector tensor; added TAS weights use independent normal(0, .02), learned state/slot identities share initial values with separate storage. No previous LACT weights are used.
@@ -17,6 +17,8 @@
 - Evaluation: automatic post-training checkpoint diagnostics, then all 9,404 TimeLens-Bench questions with v26's native prompt/decoding, 2 FPS, f448, 224px/14,680,064 budget, 64-token generation cap. Output `/mnt/localssd/VideoChat3/eval/videochat3-tas-v39-timelens-bench`. Report official R1@0.3/0.5/0.7 and mIoU against fixed Base/v26; no teacher-forced evaluation.
 
 Validation: eight focused CPU tests cover assigned-write forward/gradients, LVSM EMA, terminal write, historical gradients, reset-state isolation, per-video boundaries, checkpoint recomputation, real timestamps (including metadata without explicit duration), independent HF roundtrip/generation, native answer-only CE equivalence and every trainable parameter's gradient. Initialization preserves all 734 original tensors; 174 added tensors contain 162,167,041 TAS parameters. Joint training has 602,153,121 trainable parameters. `/mnt/localssd/VideoChat3/validation/tas-v39-smoke/` contains the separate three-step smoke: CE `1.22524/1.24580/1.20210`, pre-clip norms `49.94/45.49/70.91`, peak allocated/reserved `25.77/26.38 GB`; first two steps take `46.64/44.85s`. Step 3 resumes FP32 trainable/Adam state and reports terminal EMA mean `.099406`. The corrected export has exactly 908 tensors, and diagnostics confirm frozen LM integrity. One native generated answer per benchmark subset succeeds through the production VLMEvalKit adapter (`native_generation.json`, 3.1–5.5s, about 10.1 GB peak); these smoke answers do not establish model quality. Formal training restarts from the untouched TAS initialization, not smoke weights. No existing GPU process was stopped.
+
+Formal startup: launch commit `9e62913`; run-root `training_config.json` records the annotation-manifest and uv-lock hashes. Steps 1–3 CE `1.225243/1.245802/1.200769`, finite pre-clip norms `50.003/45.398/75.518`, LRs `0/8.333e-7/1.667e-6`; peak allocated/reserved `25.76/26.39 GB`. Steps 2–3 take `43.23/42.41s`, implying about nine hours for training under the observed shared-GPU load. Public W&B is `running`. Detached pipeline PID is stored in run-root `pipeline_pid.json`; logs are `train.log`, then `inspection.log` and `eval.log`. Successful full evaluation writes `timelens_comparison.md`; no formal benchmark scores are available yet.
 
 ## v38 - TimeLens Multi-Stage Transfer from v37 hf-200
 
