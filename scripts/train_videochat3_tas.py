@@ -34,6 +34,15 @@ class TimeLensDataset(Dataset):
         self.processor = AutoProcessor.from_pretrained(checkpoint, trust_remote_code=True)
         self.max_frames = max_frames
         self.native_template = native_template
+        if native_template:
+            # Initialize the native dataset package before ChatMessages. Its
+            # utilities import back through datasets/__init__; first importing
+            # ChatMessages inside a forked worker otherwise creates a cycle.
+            import xtuner.v1.datasets
+            from xtuner.v1.data_proto.messages import ChatMessages
+            from xtuner.v1.data_proto.templates import CHAT_TEMPLATE_MAP
+            self.chat_messages_class = ChatMessages
+            self.native_chat_template = CHAT_TEMPLATE_MAP["videochat3"]
         self.processor.video_processor.video_max_total_pixels = 14680064
         ending = "<|im_end|>" if native_template else "<|im_end|>\n"
         self.answer_lengths = [len(self.processor.tokenizer.encode(
@@ -66,16 +75,14 @@ class TimeLensDataset(Dataset):
                                 size={"shortest_edge": 784, "longest_edge": 50176})
         answer = row["messages"][1]["content"]
         if self.native_template:
-            from xtuner.v1.data_proto.messages import ChatMessages
-            from xtuner.v1.data_proto.templates import CHAT_TEMPLATE_MAP
             n = int((inputs["input_ids"] == self.processor.video_token_id).sum())
             block = self.processor.vision_start_token + self.processor.video_token*n + self.processor.vision_end_token
             original_question = next(x["text"] for x in content if x["type"] == "text")
-            messages = ChatMessages(messages=[
+            messages = self.chat_messages_class(messages=[
                 {"role": "user", "content": original_question.replace("<VIDEO_CONTEXT>", block)},
                 {"role": "assistant", "content": answer},
             ])
-            tokenized = messages.tokenize(self.processor.tokenizer, CHAT_TEMPLATE_MAP["videochat3"])
+            tokenized = messages.tokenize(self.processor.tokenizer, self.native_chat_template)
             inputs["input_ids"] = torch.tensor([tokenized["input_ids"]])
             inputs["labels"] = torch.tensor([tokenized["labels"]])
             inputs["attention_mask"] = torch.ones_like(inputs["input_ids"])
